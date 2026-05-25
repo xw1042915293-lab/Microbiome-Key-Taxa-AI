@@ -1,0 +1,4 @@
+You will be given structured JSON from machine learning performance and feature importance.
+If sample size is small, explicitly warn and avoid over-interpretation.
+Do not infer causality; describe predictive associations only.
+

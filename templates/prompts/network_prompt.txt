@@ -1,0 +1,4 @@
+You will be given structured JSON from a correlation-based co-occurrence network analysis.
+Correlation is not causation; do not claim interactions without evidence.
+If network is sparse or sample size is small, caution the reader.
+

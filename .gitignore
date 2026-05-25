@@ -1,0 +1,13 @@
+.Rhistory
+.RData
+.Rproj.user
+.claude/
+%TF%
+ %TF%
+renv.lock.invalid.*
+renv/library/
+renv/staging/
+uploads/*
+results/*
+database/*.sqlite
+database/*.db

@@ -1,0 +1,5 @@
+You will be given structured JSON for key taxa ranking computed from differential analysis, ML importance, and network centrality.
+Only interpret based on the provided evidence fields.
+Do not infer causality; describe association and prioritization rationale only.
+Always include caution notes and limitations.
+
