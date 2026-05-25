@@ -7,15 +7,15 @@ default:
   app:
     max_upload_mb: 200
   ai:
-    provider: "openai"
-    model: "gpt-4.1-mini"
+    provider: ""
+    model: ""
     temperature: 0.2
     timeout_sec: 120
     prompt_version: "v0"
   llm:
-    provider: "kkai"
-    base_url: "https://api.kkrich.ltd/v1"
-    model: "gpt-5.4"
-    api_key_env: "sk-XdZuV3GTqGnXc7VGrikGfZFtR9waJOj2YCv4UcE9HoPHgiHX"
+    provider: ""
+    base_url: ""
+    model: ""
+    api_key_env: ""
     temperature: 0.2
     max_tokens: 1200
