@@ -67,7 +67,7 @@ mod_quick_start_ui <- function(id) {
           bslib::card_header("参数设置"),
           shiny::tags$div(class = "kkai-control", shiny::uiOutput(ns("group_var_ui"))),
           shiny::tags$div(class = "kkai-control", shiny::selectInput(ns("tax_level"), "分类层级", choices = c("Genus", "Family", "Order", "Class", "Phylum", "Kingdom"), selected = "Genus")),
-          shiny::tags$div(class = "kkai-control", shiny::selectInput(ns("beta_distance"), "Beta 距离", choices = c("bray", "jaccard", "ayc"), selected = "bray")),
+          shiny::tags$div(class = "kkai-control", shiny::selectInput(ns("beta_distance"), "Beta 距离", choices = c("bray", "jaccard"), selected = "bray")),
           shiny::uiOutput(ns("param_summary"))
         )
       ),

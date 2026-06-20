@@ -1,42 +1,31 @@
-# 关键菌评分结果页：预览当前任务中的关键菌结果。
+# Key Taxa Hub page: multi-evidence key taxa screening center
+# Displays Top20 barplot, UpSet/evidence intersection, evidence heatmap,
+# score table, evidence cards, and AI summary JSON.
 
 mod_key_taxa_ui <- function(id) {
   ns <- shiny::NS(id)
   shiny::fluidPage(
-    shiny::h3("关键菌评分"),
-    shiny::p("仅展示当前任务目录中已生成的关键菌评分结果。"),
-    shiny::uiOutput(ns("score_plot")),
-    shiny::tags$div(style = "margin-top: 1rem;"),
-    bslib::card(
-      class = "kkai-card",
-      bslib::card_header("前 20 个结果"),
-      DT::DTOutput(ns("top20_tbl"))
-    ),
-    shiny::tags$div(style = "margin-top: 1rem;"),
-    shiny::uiOutput(ns("summary_card")),
-    shiny::tags$div(style = "margin-top: 1rem;"),
-    bslib::card(
-      class = "kkai-card",
-      bslib::card_header("关键菌评分公式"),
-      shiny::tags$pre(
-        class = "kkai-codeblock",
-        paste(
-          "Let d, m, n be normalized sub-scores in [0, 1]:",
-          "  d = differential_score",
-          "  m = ml_importance_score",
-          "  n = network_centrality_score",
-          "",
-          "Let weights be (w_diff, w_ml, w_network), and let I_d/I_m/I_n indicate whether a taxon has that evidence (finite value).",
-          "",
-          "KeyTaxaScore = (I_d*d*w_diff + I_m*m*w_ml + I_n*n*w_network) / (I_d*w_diff + I_m*w_ml + I_n*w_network)",
-          "",
-          "Note: the denominator uses only available evidence per taxon (missing evidence does not force NA).",
-          sep = "\n"
-        )
+    shiny::h3("Key Taxa Hub"),
+    shiny::p("Multi-evidence comprehensive key taxa screening center."),
+
+    bslib::navset_tab(
+      bslib::nav_panel("Top 20 Barplot",
+        shiny::uiOutput(ns("score_plot_ui"))
       ),
-      shiny::tags$details(
-        shiny::tags$summary("详情"),
-        shiny::tags$p("该页仅用于查看当前任务的关键菌输出。")
+      bslib::nav_panel("Evidence Intersection",
+        shiny::uiOutput(ns("upset_plot_ui"))
+      ),
+      bslib::nav_panel("Evidence Heatmap",
+        shiny::uiOutput(ns("heatmap_ui"))
+      ),
+      bslib::nav_panel("Score Table",
+        shiny::uiOutput(ns("score_table_ui"))
+      ),
+      bslib::nav_panel("Evidence Cards",
+        shiny::uiOutput(ns("cards_ui"))
+      ),
+      bslib::nav_panel("AI Summary",
+        shiny::uiOutput(ns("summary_ui"))
       )
     )
   )
@@ -63,89 +52,148 @@ mod_key_taxa_server <- function(id, state) {
       if (dir.exists(figs_dir)) safe_add_resource_path(fig_prefix(), figs_dir)
     }, ignoreInit = TRUE)
 
-    output$score_plot <- shiny::renderUI({
+    # Helper to show file or friendly missing message
+    show_image_or_msg <- function(filename, title) {
       if (is.null(state$job_dir)) {
-        return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "当前没有活动任务，请先运行分析。"))
+        return(shiny::tags$div(class = "kkai-alert kkai-alert--info",
+          "No active task. Please run an analysis first."))
       }
-
-      png_file <- "key_taxa_score_barplot.png"
-      full <- file.path(state$job_dir, "figures", png_file)
+      full <- file.path(state$job_dir, "figures", filename)
       if (!file.exists(full)) {
-        return(
-          shiny::tags$div(
-            class = "kkai-alert kkai-alert--info",
-            shiny::tags$b("未找到关键菌评分图。"),
-            shiny::tags$div("请先生成工作流输出。")
-          )
-        )
+        return(shiny::tags$div(class = "kkai-alert kkai-alert--info",
+          shiny::tags$b(paste0(title, " not found.")),
+          shiny::tags$div("Please run the Key Taxa analysis first.")))
       }
-
-      bslib::card(
-        class = "kkai-card",
-        bslib::card_header("关键菌评分图"),
+      bslib::card(class = "kkai-card",
+        bslib::card_header(title),
         shiny::tags$div(class = "kkai-result-image-wrap",
-          shiny::tags$img(src = file.path(fig_prefix(), png_file), class = "kkai-result-img kkai-result-img--small")
-        )
+          shiny::tags$img(src = file.path(fig_prefix(), filename), class = "kkai-result-img"))
       )
-    })
+    }
 
-    output$top20_tbl <- DT::renderDT({
+    show_table_or_msg <- function(filename, message_text) {
       if (is.null(state$job_dir)) {
-        return(DT::datatable(data.frame(Message = "当前没有活动任务。"), rownames = FALSE, options = list(dom = "t")))
+        return(DT::datatable(data.frame(Message = "No active task."), rownames = FALSE, options = list(dom = "t")))
       }
-      p <- file.path(state$job_dir, "tables", "key_taxa_top20.csv")
+      p <- file.path(state$job_dir, "tables", filename)
       if (!file.exists(p)) {
-        return(DT::datatable(data.frame(Message = "未找到 tables/key_taxa_top20.csv。"), rownames = FALSE, options = list(dom = "t")))
+        return(DT::datatable(data.frame(Message = message_text), rownames = FALSE, options = list(dom = "t")))
       }
       df <- tryCatch(readr::read_csv(p, show_col_types = FALSE, progress = FALSE), error = function(e) NULL)
       if (is.null(df) || !is.data.frame(df) || nrow(df) < 1) {
-        return(DT::datatable(data.frame(Message = "key_taxa_top20.csv 中没有数据。"), rownames = FALSE, options = list(dom = "t")))
+        return(DT::datatable(data.frame(Message = paste(filename, "is empty.")), rownames = FALSE, options = list(dom = "t")))
       }
-      DT::datatable(df, rownames = FALSE, options = list(pageLength = 20, dom = "tip", autoWidth = TRUE))
+      DT::datatable(df, rownames = FALSE, options = list(pageLength = 20, scrollX = TRUE, dom = "tip"))
+    }
+
+    # Tab 1: Top 20 barplot
+    output$score_plot_ui <- shiny::renderUI({
+      show_image_or_msg("key_taxa_score_barplot.png", "Top 20 Key Taxa Score Barplot")
     })
 
-    output$summary_card <- shiny::renderUI({
-      if (is.null(state$job_dir)) return(NULL)
+    # Tab 2: UpSet / evidence intersection
+    output$upset_plot_ui <- shiny::renderUI({
+      show_image_or_msg("key_taxa_upset.png", "Evidence Intersection Plot")
+    })
+
+    # Tab 3: Evidence heatmap
+    output$heatmap_ui <- shiny::renderUI({
+      show_image_or_msg("key_taxa_evidence_heatmap.png", "Evidence Heatmap")
+    })
+
+    # Tab 4: Score table
+    output$score_table_ui <- shiny::renderUI({
+      shiny::tagList(
+        shiny::h4("Key Taxa Score Table"),
+        DT::DTOutput(session$ns("score_tbl"))
+      )
+    })
+    output$score_tbl <- DT::renderDT({
+      show_table_or_msg("key_taxa_score.csv", "No key_taxa_score.csv found.")
+    })
+
+    # Tab 5: Evidence cards
+    output$cards_ui <- shiny::renderUI({
+      shiny::tagList(
+        shiny::h4("Candidate Key Taxa Evidence Cards"),
+        DT::DTOutput(session$ns("cards_tbl"))
+      )
+    })
+    output$cards_tbl <- DT::renderDT({
+      show_table_or_msg("key_taxa_evidence_cards.csv", "No key_taxa_evidence_cards.csv found.")
+    })
+
+    # Tab 6: AI summary JSON
+    output$summary_ui <- shiny::renderUI({
+      if (is.null(state$job_dir)) {
+        return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "No active task."))
+      }
       p <- file.path(state$job_dir, "json", "key_taxa_summary.json")
       if (!file.exists(p)) {
-        return(
-          shiny::tags$div(
-            class = "kkai-alert kkai-alert--info",
-            shiny::tags$b("未找到 key_taxa_summary.json。"),
-            shiny::tags$div("预期路径：", shiny::tags$code(file.path("json", "key_taxa_summary.json")))
-          )
-        )
+        return(shiny::tags$div(class = "kkai-alert kkai-alert--info",
+          shiny::tags$b("key_taxa_summary.json not found."),
+          shiny::tags$div("Expected: ", shiny::tags$code("json/key_taxa_summary.json"))))
       }
-
       x <- tryCatch(jsonlite::fromJSON(p, simplifyVector = TRUE), error = function(e) NULL)
       if (!is.list(x)) {
-        return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "读取 key_taxa_summary.json 失败。"))
+        return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "Failed to read key_taxa_summary.json."))
       }
 
-      used_sources <- x$used_sources %||% character(0)
-      weights <- x$weights %||% list()
-      reliability <- x$reliability %||% NA_character_
+      # Build summary display
+      hc <- x$high_confidence_count %||% 0
+      mc <- x$moderate_confidence_count %||% 0
+      ex <- x$exploratory_count %||% 0
+      we <- x$weak_evidence_count %||% 0
 
-      fmt_weights <- function(w) {
-        if (is.null(w)) return(character(0))
-        if (is.atomic(w) && !is.null(names(w))) {
-          return(sprintf("%s = %s", names(w), as.character(w)))
-        }
-        if (is.list(w) && length(w) > 0) {
-          nms <- names(w) %||% rep("", length(w))
-          return(mapply(function(nm, val) sprintf("%s = %s", nm, as.character(val)), nms, w, USE.NAMES = FALSE))
-        }
-        character(0)
+      caution_ui <- if (!is.null(x$caution_notes) && length(x$caution_notes) > 0) {
+        shiny::tags$ul(lapply(x$caution_notes, function(n) shiny::tags$li(n)))
+      } else {
+        shiny::tags$p("No caution notes available.")
       }
 
-      bslib::card(
-        class = "kkai-card",
-        bslib::card_header("摘要"),
+      top_taxa_ui <- if (!is.null(x$top_key_taxa) && length(x$top_key_taxa) > 0) {
+        top_df <- tryCatch({
+          rows <- lapply(x$top_key_taxa, function(t) {
+            data.frame(
+              Taxon = as.character(t$display_taxon %||% t$taxon),
+              Score = round(as.numeric(t$key_taxa_score), 4),
+              Evidence = as.integer(t$evidence_count),
+              Reliability = as.character(t$reliability_label),
+              stringsAsFactors = FALSE
+            )
+          })
+          do.call(rbind, rows)
+        }, error = function(e) NULL)
+        if (!is.null(top_df)) DT::datatable(top_df, rownames = FALSE, options = list(dom = "t", pageLength = 10))
+        else shiny::tags$p("Top taxa data unavailable.")
+      } else {
+        shiny::tags$p("No top key taxa available.")
+      }
+
+      bslib::card(class = "kkai-card",
+        bslib::card_header("Key Taxa AI Summary"),
         shiny::tags$div(
-          class = "kkai-kv",
-          shiny::tags$div(shiny::tags$b("使用来源："), shiny::tags$code(paste(used_sources, collapse = ", "))),
-          shiny::tags$div(shiny::tags$b("权重："), shiny::tags$code(paste(fmt_weights(weights), collapse = "; "))),
-          shiny::tags$div(shiny::tags$b("可靠性："), shiny::tags$code(as.character(reliability)))
+          shiny::tags$div(shiny::tags$b("Analysis type: "), shiny::code(x$analysis_type %||% "key_taxa_score")),
+          shiny::tags$div(shiny::tags$b("Scoring formula: "), shiny::tags$code(x$scoring_formula %||% "N/A")),
+          shiny::tags$div(shiny::tags$b("Available evidence: "),
+            shiny::code(paste(x$available_evidence_modules %||% "none", collapse = ", "))),
+          shiny::tags$div(shiny::tags$b("Missing evidence: "),
+            shiny::code(paste(x$missing_evidence_modules %||% "none", collapse = ", "))),
+          shiny::tags$hr(),
+          shiny::tags$div(shiny::tags$b("Confidence counts:"),
+            shiny::tags$ul(
+              shiny::tags$li("High confidence: ", shiny::tags$b(as.character(hc))),
+              shiny::tags$li("Moderate confidence: ", shiny::tags$b(as.character(mc))),
+              shiny::tags$li("Exploratory: ", shiny::tags$b(as.character(ex))),
+              shiny::tags$li("Weak evidence: ", shiny::tags$b(as.character(we)))
+            )
+          ),
+          shiny::tags$hr(),
+          shiny::tags$h5("Top Key Taxa"),
+          top_taxa_ui,
+          shiny::tags$hr(),
+          shiny::tags$h5("Caution Notes"),
+          caution_ui
         )
       )
     })

@@ -18,7 +18,9 @@ required_packages <- c(
   "digest",
   "microeco",
   "vegan",
-  "quarto"
+  "quarto",
+  "markdown",
+  "igraph"
 )
 
 missing <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]

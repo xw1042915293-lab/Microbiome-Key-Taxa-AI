@@ -2,6 +2,11 @@ setwd("D:/Microbiome Key Taxa AI")
 
 source("tests/test_data_import.R")
 source("tests/test_data_check.R")
+source("tests/test_ai_rules.R")
+source("tests/test_ai_interpretation.R")
+source("tests/test_diff_analysis.R")
+source("tests/test_key_taxa_score.R")
+source("tests/test_network_analysis.R")
+source("tests/test_workflow_state.R")
 
 cat("ok\n")
-

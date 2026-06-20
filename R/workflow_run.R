@@ -78,9 +78,11 @@ run_basic_analysis <- function(input_data, job_dir, group_var, beta_distance = "
   )
 }
 
-# Phase 3: differential abundance + Quarto HTML report.
+# Phase 3: differential abundance.
+# Keep report rendering optional so the full workflow can defer it to Phase 8.
 run_phase3_workflow <- function(dataset, job_dir, group_var, tax_level = "Genus",
-                                progress_cb = NULL, log_path = NULL) {
+                                progress_cb = NULL, log_path = NULL,
+                                render_report = TRUE) {
   if (is.null(dataset)) stop("run_phase3_workflow(): dataset is NULL.", call. = FALSE)
   assert_non_empty_string(job_dir, "job_dir")
   if (!dir.exists(job_dir)) stop("run_phase3_workflow(): job_dir not found: ", job_dir, call. = FALSE)
@@ -103,9 +105,12 @@ run_phase3_workflow <- function(dataset, job_dir, group_var, tax_level = "Genus"
   )
   wf_emit_progress(progress_cb, log_path, "diff", "done", NULL)
 
-  wf_emit_progress(progress_cb, log_path, "report", "running", "Generating report")
-  report_path <- render_report_html(job_dir)
-  wf_emit_progress(progress_cb, log_path, "report", "done", NULL)
+  report_path <- NULL
+  if (isTRUE(render_report)) {
+    wf_emit_progress(progress_cb, log_path, "report", "running", "Generating report")
+    report_path <- render_report_html(job_dir)
+    wf_emit_progress(progress_cb, log_path, "report", "done", NULL)
+  }
 
   append_reproducibility(job_dir, list(
     phase3 = list(finished_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S"))
@@ -280,7 +285,8 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
     group_var = group_var,
     tax_level = tax_level,
     progress_cb = progress_cb,
-    log_path = log_path
+    log_path = log_path,
+    render_report = FALSE
   )
 
   wf_emit_progress(progress_cb, log_path, "ai", "running", NULL)

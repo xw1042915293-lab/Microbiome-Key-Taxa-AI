@@ -1,4 +1,4 @@
-# 结果总览：以仪表盘方式汇总已有分析输出。
+# Result overview: selector-based view, one card at a time.
 
 mod_results_overview_ui <- function(id) {
   ns <- shiny::NS(id)
@@ -13,14 +13,26 @@ mod_results_overview_ui <- function(id) {
       ),
       shiny::uiOutput(ns("summary_bar")),
       shiny::tags$div(
-        class = "kkai-results-grid",
-        shiny::uiOutput(ns("alpha_card")),
-        shiny::uiOutput(ns("beta_card")),
-        shiny::uiOutput(ns("diff_card")),
-        shiny::uiOutput(ns("ai_card")),
-        shiny::uiOutput(ns("ml_card")),
-        shiny::uiOutput(ns("network_card")),
-        shiny::uiOutput(ns("key_taxa_card"))
+        class = "kkai-results-selector-row",
+        shiny::selectInput(
+          ns("result_picker"),
+          label = "选择查看的结果",
+          choices = c(
+            "Alpha 多样性"  = "alpha",
+            "Beta 多样性"   = "beta",
+            "差异丰度"      = "diff",
+            "AI 解释"       = "ai",
+            "机器学习"      = "ml",
+            "网络分析"      = "network",
+            "关键菌评分"    = "key_taxa"
+          ),
+          selected = "alpha",
+          width = "100%"
+        )
+      ),
+      shiny::tags$div(
+        class = "kkai-results-panel",
+        shiny::uiOutput(ns("selected_card"))
       )
     )
   )
@@ -53,7 +65,8 @@ mod_results_overview_server <- function(id, state) {
     }, ignoreInit = TRUE)
 
     .status_badge <- function(ok, label = NULL) {
-      ui_status_badge(label %||% if (isTRUE(ok)) "ready" else "missing", kind = if (isTRUE(ok)) "success" else "warning")
+      ui_status_badge(label %||% if (isTRUE(ok)) "ready" else "missing",
+                      kind = if (isTRUE(ok)) "success" else "warning")
     }
 
     .img_card <- function(title, img_file, summary, details_ui = NULL) {
@@ -62,7 +75,7 @@ mod_results_overview_server <- function(id, state) {
           bslib::card(
             class = "kkai-card kkai-card--quick",
             bslib::card_header(title),
-            shiny::tags$div(class = "kkai-alert kkai-alert--info", "No active job yet.")
+            shiny::tags$div(class = "kkai-alert kkai-alert--info", "暂无活跃任务，请先运行分析。")
           )
         )
       }
@@ -73,11 +86,15 @@ mod_results_overview_server <- function(id, state) {
         bslib::card_header(title),
         shiny::tags$div(class = "kkai-result-summary", summary),
         if (isTRUE(has_img)) {
-          shiny::tags$div(class = "kkai-result-image-wrap",
-            shiny::tags$img(src = paste0(fig_prefix(), "/", img_file), class = "kkai-result-img kkai-result-img--fit")
+          shiny::tags$div(
+            class = "kkai-result-image-wrap",
+            shiny::tags$img(
+              src = paste0(fig_prefix(), "/", img_file),
+              class = "kkai-result-img kkai-result-img--fit"
+            )
           )
         } else {
-          shiny::tags$div(class = "kkai-alert kkai-alert--warning", "Figure not found yet.")
+          shiny::tags$div(class = "kkai-alert kkai-alert--warning", "图表尚未生成。")
         },
         details_ui
       )
@@ -85,88 +102,101 @@ mod_results_overview_server <- function(id, state) {
 
     output$summary_bar <- shiny::renderUI({
       if (is.null(state$job_dir)) {
-        return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "请先在快速开始中创建任务并生成结果。"))
+        return(shiny::tags$div(
+          class = "kkai-alert kkai-alert--info",
+          "请先在快速开始中创建任务并生成结果。"
+        ))
       }
-
       rp <- report_path()
       report_exists <- !is.null(rp) && file.exists(rp)
       shiny::tags$div(
         class = "kkai-results-summary",
-        shiny::tags$div(shiny::tags$b("任务 ID："), " ", shiny::tags$code(state$job_id %||% "(none)")),
-        shiny::tags$div(shiny::tags$b("任务状态："), " ", .status_badge(TRUE, "active")),
-        shiny::tags$div(shiny::tags$b("报告："), " ", .status_badge(report_exists, if (report_exists) "available" else "missing"))
+        shiny::tags$div(shiny::tags$b("任务 ID："), " ",
+                        shiny::tags$code(state$job_id %||% "(none)")),
+        shiny::tags$div(shiny::tags$b("任务状态："), " ",
+                        .status_badge(TRUE, "active")),
+        shiny::tags$div(shiny::tags$b("报告："), " ",
+                        .status_badge(report_exists,
+                                      if (report_exists) "available" else "missing"))
       )
     })
 
-    output$alpha_card <- shiny::renderUI({
-      .img_card(
-        "Alpha 多样性",
-        "alpha_shannon_boxplot.png",
-        "Shannon diversity summary for the selected group variable.",
-        shiny::tags$details(
-          shiny::tags$summary("更多"),
-          shiny::tags$div(
-            class = "kkai-details-grid",
+    output$selected_card <- shiny::renderUI({
+      sel <- input$result_picker %||% "alpha"
+      switch(
+        sel,
+        alpha = .img_card(
+          "Alpha 多样性",
+          "alpha_shannon_boxplot.png",
+          "Shannon diversity summary for the selected group variable.",
+          shiny::tags$details(
+            shiny::tags$summary("更多"),
             shiny::tags$div(
-              shiny::tags$b("详情："),
-              shiny::tags$div(shiny::tags$a(href = "#", "可在“更多”中打开 Alpha 多样性页面。"))
+              class = "kkai-details-grid",
+              shiny::tags$div(
+                shiny::tags$b("详情："),
+                shiny::tags$div(shiny::tags$a(
+                  href = "#",
+                  "可在更多面板中打开 Alpha 多样性页面。"
+                ))
+              )
             )
           )
+        ),
+        beta = .img_card(
+          "Beta 多样性",
+          "beta_pcoa_bray.png",
+          "Bray-Curtis ordination overview.",
+          shiny::tags$details(
+            shiny::tags$summary("更多"),
+            shiny::tags$div("可在更多面板中打开 Beta 多样性页面。")
+          )
+        ),
+        diff = .img_card(
+          "差异丰度",
+          "diff_volcano.png",
+          "Taxa-level differential signal summary.",
+          shiny::tags$details(
+            shiny::tags$summary("更多"),
+            shiny::tags$div("可在更多面板中打开差异丰度页面。")
+          )
+        ),
+        ai = .img_card(
+          "AI 解释",
+          "diff_volcano.png",
+          "Interpretation artifacts and fallback notes.",
+          shiny::tags$details(
+            shiny::tags$summary("更多"),
+            shiny::tags$div("可在更多面板中打开 AI 解释页面。")
+          )
+        ),
+        ml = .img_card(
+          "机器学习",
+          "ml_importance.png",
+          "Random Forest screening summary.",
+          shiny::tags$details(
+            shiny::tags$summary("更多"),
+            shiny::tags$div("可在更多面板中打开机器学习页面。")
+          )
+        ),
+        network = .img_card(
+          "网络分析",
+          "network_plot.png",
+          "Exploratory co-occurrence network summary.",
+          shiny::tags$details(
+            shiny::tags$summary("更多"),
+            shiny::tags$div("可在更多面板中打开网络分析页面。")
+          )
+        ),
+        key_taxa = .img_card(
+          "关键菌评分",
+          "key_taxa_score_barplot.png",
+          "Integrated ranking across differential, ML, and network evidence.",
+          shiny::tags$details(
+            shiny::tags$summary("更多"),
+            shiny::tags$div("可在更多面板中打开关键菌评分页面。")
+          )
         )
-      )
-    })
-
-    output$beta_card <- shiny::renderUI({
-      .img_card(
-        "Beta 多样性",
-        "beta_pcoa_bray.png",
-        "Bray-Curtis ordination overview.",
-        shiny::tags$details(shiny::tags$summary("更多"), shiny::tags$div("可在“更多”中打开 Beta 多样性页面。"))
-      )
-    })
-
-    output$diff_card <- shiny::renderUI({
-      .img_card(
-        "差异丰度",
-        "diff_volcano.png",
-        "Taxa-level differential signal summary.",
-        shiny::tags$details(shiny::tags$summary("更多"), shiny::tags$div("可在“更多”中打开差异丰度页面。"))
-      )
-    })
-
-    output$ai_card <- shiny::renderUI({
-      .img_card(
-        "AI 解释",
-        "diff_volcano.png",
-        "Interpretation artifacts and fallback notes.",
-        shiny::tags$details(shiny::tags$summary("更多"), shiny::tags$div("可在“更多”中打开 AI 解释页面。"))
-      )
-    })
-
-    output$ml_card <- shiny::renderUI({
-      .img_card(
-        "机器学习",
-        "ml_importance.png",
-        "Random Forest screening summary.",
-        shiny::tags$details(shiny::tags$summary("更多"), shiny::tags$div("可在“更多”中打开机器学习页面。"))
-      )
-    })
-
-    output$network_card <- shiny::renderUI({
-      .img_card(
-        "网络分析",
-        "network_plot.png",
-        "Exploratory co-occurrence network summary.",
-        shiny::tags$details(shiny::tags$summary("更多"), shiny::tags$div("可在“更多”中打开网络分析页面。"))
-      )
-    })
-
-    output$key_taxa_card <- shiny::renderUI({
-      .img_card(
-        "关键菌评分",
-        "key_taxa_score_barplot.png",
-        "Integrated ranking across differential, ML, and network evidence.",
-        shiny::tags$details(shiny::tags$summary("更多"), shiny::tags$div("可在“更多”中打开关键菌评分页面。"))
       )
     })
   })

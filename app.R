@@ -6,7 +6,7 @@
 source("global.R", local = TRUE)
 
 ui <- bslib::page_navbar(
-  title = "Microbiome Key Taxa AI",
+  title = "基于 microeco 的微生物组关键菌筛选与可信解释系统 V1.0",
   id = "main_nav",
   theme = bslib::bs_theme(
     version = 5,
@@ -18,7 +18,7 @@ ui <- bslib::page_navbar(
   header = shiny::tagList(
     shiny::tags$head(
       shiny::tags$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
-      shiny::tags$link(rel = "stylesheet", type = "text/css", href = "style.css")
+      shiny::tags$link(rel = "stylesheet", type = "text/css", href = "style.css?v=12")
     )
   ),
 
@@ -53,11 +53,13 @@ ui <- bslib::page_navbar(
 
 server <- function(input, output, session) {
   analysis_state <- create_analysis_state()
+  setup_analysis_state_machine(analysis_state, session)
 
   output$active_job_banner <- shiny::renderUI({
-    job_id <- analysis_state$active_job_id %||% analysis_state$job_id
-    job_dir <- analysis_state$active_job_dir %||% analysis_state$job_dir
-    src <- analysis_state$active_source %||% ""
+    job <- workflow_get_active_job(analysis_state)
+    job_id <- job$job_id %||% NULL
+    job_dir <- job$job_dir %||% NULL
+    src <- job$source %||% ""
 
     if (is.null(job_dir) || !nzchar(job_dir)) {
       return(
@@ -76,7 +78,7 @@ server <- function(input, output, session) {
     )
   })
 
-  mod_home_server("home", state = analysis_state)
+  mod_home_server("home", state = analysis_state, parent_session = session)
   mod_demo_server("demo", state = analysis_state)
   mod_quick_start_server("quick_start", state = analysis_state)
   mod_results_overview_server("results", state = analysis_state)

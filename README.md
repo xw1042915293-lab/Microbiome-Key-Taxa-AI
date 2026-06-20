@@ -3,6 +3,11 @@
 ## 项目简介
 Microbiome Key Taxa AI 是一个用于“关键菌/标志物筛选 + 可复现实验记录 + 报告生成”的 R Shiny 应用。用户上传 abundance / metadata / taxonomy 三张表后，系统会为每次运行创建独立的 `results/job_*/` 目录，并把分析中间结果、图表、JSON、AI 辅助文本与最终 `report.html` 全部固化到该 job 目录中，便于复现与答辩展示。
 
+软著/答辩材料可优先参考：
+- `docs/SOFTWARE_COPYRIGHT_SUBMISSION.md`
+- `docs/SYSTEM_DESIGN.md`
+- `docs/USER_GUIDE.md`
+
 ## 核心功能
 - Upload Inputs: 上传并固化三类输入文件到 job 目录（同时记录 MD5 与可复现信息）。
 - Data Check: 必做数据校验，并将汇总保存为 `tables/data_check_summary.csv`。
@@ -55,6 +60,20 @@ renv::restore()
 ```r
 shiny::runApp()
 ```
+
+如果在 Windows 终端中查看中文文档或日志时出现乱码，建议先切换到 UTF-8：
+
+```powershell
+chcp 65001
+```
+
+如果只想快速验证应用能否启动，也可以在命令行运行：
+
+```powershell
+Rscript -e "shiny::runApp('.', host='127.0.0.1', port=3850, launch.browser=FALSE)"
+```
+
+然后在浏览器访问 `http://127.0.0.1:3850`。
 
 ## 输入文件格式
 支持 `.tsv/.csv/.txt`（建议使用 tsv，首行为表头）。示例文件位于：
@@ -137,3 +156,7 @@ Run Analysis 报错 `group_var not set`：
 - 当前一键流程中部分参数为固定默认值（例如 `beta_distance = "bray"`、`tax_level = "Genus"`）。
 - 输入文件需要严格满足列名约定：metadata 必须有 `SampleID`；abundance/taxonomy 必须有 `FeatureID`，且样本/特征需要能正确对齐。
 - `report.html` 依赖 Quarto 环境；不同机器的 Quarto 安装情况会直接影响报告渲染。
+
+## 维护建议
+- 依赖升级后执行 `renv::snapshot()`，保持 `renv.lock` 与实际运行环境一致。
+- 发版或提交材料前，建议至少运行一次 `Rscript scripts/run_tests.R` 和各阶段 smoke 脚本。

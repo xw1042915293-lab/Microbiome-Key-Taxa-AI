@@ -1,10 +1,10 @@
----
+﻿---
 title: "Microbiome Key Taxa AI Report"
 format:
   html:
     toc: true
     theme: cosmo
-    embed-resources: true
+    embed-resources: false
 params:
   job_dir: ""
   report_ctx: null
@@ -91,6 +91,11 @@ fmt_kv <- function(x) {
 
 `%||%` <- function(x, y) {
   if (is.null(x) || length(x) == 0) y else x
+}
+
+beta_slugify <- function(x) {
+  x <- tolower(trimws(as.character(x %||% "bray")))
+  gsub("[^a-z0-9]+", "_", x)
 }
 
 display_taxon <- function(x) {
@@ -249,7 +254,7 @@ if (is.null(checks)) {
 
 ### Alpha/Beta Diversity
 
-Alpha diversity indices are computed per sample and compared between groups when a group variable is provided. Beta diversity is summarized using Bray-Curtis distance with ordination and PERMANOVA.
+Alpha diversity indices are computed per sample and compared between groups when a group variable is provided. Beta diversity is summarized from the saved job outputs, including distance-matrix ordination, PERMANOVA, beta dispersion, NMDS, pairwise distance structure, and ANOSIM.
 
 ### Differential Abundance Analysis
 
@@ -280,19 +285,123 @@ if (!is.null(alpha)) knitr::kable(alpha, caption = "Alpha diversity indices per 
 ```
 
 ```{r}
+alpha_summary_path <- ctx$paths$json$alpha_summary %||% file.path(job_dir, "json", "alpha_summary.json")
+alpha_summary <- safe_read_json(alpha_summary_path)
+if (is.list(alpha_summary)) {
+  alpha_overview <- data.frame(
+    Item = c("Group variable", "Samples", "Groups", "Indices calculated"),
+    Value = c(
+      alpha_summary$group_variable %||% "(unavailable)",
+      alpha_summary$n_samples %||% "(unavailable)",
+      alpha_summary$n_groups %||% "(unavailable)",
+      fmt_kv(alpha_summary$indices_calculated %||% character(0))
+    ),
+    stringsAsFactors = FALSE
+  )
+  knitr::kable(alpha_overview, caption = "Alpha diversity summary")
+}
+```
+
+```{r}
+alpha_group_summary_path <- ctx$paths$tables$alpha_group_summary %||% file.path(job_dir, "tables", "alpha_group_summary.csv")
+alpha_group_summary <- safe_read_csv(alpha_group_summary_path)
+if (!is.null(alpha_group_summary)) knitr::kable(alpha_group_summary, caption = "Alpha diversity grouped descriptive summary")
+```
+
+```{r}
 alpha_stats_path <- ctx$paths$tables$alpha_stats %||% file.path(job_dir, "tables", "alpha_stats.csv")
 stats <- safe_read_csv(alpha_stats_path)
 if (!is.null(stats)) knitr::kable(stats, caption = "Alpha diversity group comparison")
 ```
 
 ```{r}
+alpha_pairwise_path <- ctx$paths$tables$alpha_pairwise_stats %||% file.path(job_dir, "tables", "alpha_pairwise_stats.csv")
+alpha_pairwise <- safe_read_csv(alpha_pairwise_path)
+if (!is.null(alpha_pairwise) && nrow(alpha_pairwise) > 0) {
+  knitr::kable(alpha_pairwise, caption = "Alpha diversity pairwise Wilcoxon comparison")
+}
+```
+
+```{r}
 #| fig-cap: "Figure 1. Shannon alpha diversity by group."
 #| out-width: "100%"
-fig_alpha <- ctx$paths$figures$alpha_shannon_boxplot %||% file.path(job_dir, "figures", "alpha_shannon_boxplot.png")
+fig_alpha_violin <- ctx$paths$figures$alpha_shannon_violin_boxplot %||% file.path(job_dir, "figures", "alpha_shannon_violin_boxplot.png")
+fig_alpha_box <- ctx$paths$figures$alpha_shannon_boxplot %||% file.path(job_dir, "figures", "alpha_shannon_boxplot.png")
+fig_alpha <- if (file.exists(fig_alpha_violin)) fig_alpha_violin else fig_alpha_box
 safe_include_graphics(fig_alpha)
 ```
 
+```{r}
+#| fig-cap: "Figure 1S. Multi-index alpha diversity overview."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$alpha_multi_index_facet %||% file.path(job_dir, "figures", "alpha_multi_index_facet.png"))
+```
+
+```{r}
+seq_depth_path <- ctx$paths$tables$sequencing_depth_summary %||% file.path(job_dir, "tables", "sequencing_depth_summary.csv")
+seq_depth <- safe_read_csv(seq_depth_path)
+if (!is.null(seq_depth)) knitr::kable(seq_depth, caption = "Sequencing depth summary")
+```
+
+```{r}
+#| fig-cap: "Figure 1S2. Sequencing depth per sample."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$sequencing_depth_barplot %||% file.path(job_dir, "figures", "sequencing_depth_barplot.png"))
+```
+
+```{r}
+rare_path <- ctx$paths$tables$rarefaction_summary %||% file.path(job_dir, "tables", "rarefaction_summary.csv")
+rare_tbl <- safe_read_csv(rare_path)
+if (!is.null(rare_tbl)) knitr::kable(rare_tbl, caption = "Rarefaction summary")
+```
+
+```{r}
+#| fig-cap: "Figure 1S3. Alpha rarefaction curve."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$alpha_rarefaction_curve %||% file.path(job_dir, "figures", "alpha_rarefaction_curve.png"))
+```
+
+```{r}
+#| fig-cap: "Figure 1S4. Alpha index heatmap (Z-score standardized)."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$alpha_index_heatmap %||% file.path(job_dir, "figures", "alpha_index_heatmap.png"))
+```
+
+```{r results='asis'}
+if (is.list(alpha_summary) && !is.null(alpha_summary$caution_notes) && length(alpha_summary$caution_notes) > 0) {
+  cat("**Alpha diversity interpretation notes**\n\n")
+  for (note in alpha_summary$caution_notes) {
+    cat("- ", note, "\n", sep = "")
+  }
+  cat("\n")
+}
+```
+
 ## Beta Diversity
+
+```{r}
+beta_summary_path <- ctx$paths$json$beta_summary %||% file.path(job_dir, "json", "beta_summary.json")
+beta_summary <- safe_read_json(beta_summary_path)
+beta_distance_method <- if (is.list(beta_summary) && !is.null(beta_summary$distance_method)) as.character(beta_summary$distance_method) else (ctx$beta$distance_method %||% "bray")
+beta_distance_label <- if (is.list(beta_summary) && !is.null(beta_summary$distance_label)) as.character(beta_summary$distance_label) else (ctx$beta$distance_label %||% beta_distance_method)
+beta_distance_slug <- if (is.list(ctx$beta) && !is.null(ctx$beta$distance_slug)) as.character(ctx$beta$distance_slug) else beta_slugify(beta_distance_method)
+
+beta_overview <- data.frame(
+  item = c("Distance method", "Group variable", "PERMANOVA R2", "PERMANOVA p", "Dispersion p", "ANOSIM R", "ANOSIM p", "NMDS stress"),
+  value = c(
+    beta_distance_label,
+    beta_summary$group_variable %||% "(unavailable)",
+    beta_summary$permanova_r2 %||% "(unavailable)",
+    beta_summary$permanova_p %||% "(unavailable)",
+    beta_summary$dispersion_p %||% "(unavailable)",
+    beta_summary$anosim_r %||% "(unavailable)",
+    beta_summary$anosim_p %||% "(unavailable)",
+    beta_summary$nmds_stress %||% "(unavailable)"
+  ),
+  stringsAsFactors = FALSE
+)
+knitr::kable(beta_overview, caption = "Beta diversity summary overview")
+```
 
 ```{r}
 beta_perm_path <- ctx$paths$tables$beta_permanova %||% file.path(job_dir, "tables", "beta_permanova.csv")
@@ -301,10 +410,80 @@ if (!is.null(perm)) knitr::kable(perm, caption = "PERMANOVA results")
 ```
 
 ```{r}
-#| fig-cap: "Figure 2. Bray-Curtis PCoA ordination (beta diversity)."
+#| fig-cap: "Figure 2. PCoA ordination for the selected beta-diversity distance."
 #| out-width: "100%"
-fig_beta <- ctx$paths$figures$beta_pcoa_bray %||% file.path(job_dir, "figures", "beta_pcoa_bray.png")
+fig_beta <- ctx$paths$figures$beta_pcoa_selected %||% file.path(job_dir, "figures", paste0("beta_pcoa_", beta_distance_slug, ".png"))
 safe_include_graphics(fig_beta)
+```
+
+```{r}
+beta_disp_path <- ctx$paths$tables$beta_dispersion %||% file.path(job_dir, "tables", "beta_dispersion.csv")
+beta_disp <- safe_read_csv(beta_disp_path)
+if (!is.null(beta_disp)) knitr::kable(beta_disp, caption = "Beta dispersion results")
+```
+
+```{r}
+beta_nmds_summary_path <- ctx$paths$tables$beta_nmds_summary %||% file.path(job_dir, "tables", "beta_nmds_summary.csv")
+beta_nmds_summary <- safe_read_csv(beta_nmds_summary_path)
+if (!is.null(beta_nmds_summary)) knitr::kable(beta_nmds_summary, caption = "NMDS summary")
+```
+
+```{r}
+#| fig-cap: "Figure 2S1. NMDS ordination for the selected beta-diversity distance."
+#| out-width: "100%"
+fig_beta_nmds <- ctx$paths$figures$beta_nmds_selected %||% file.path(job_dir, "figures", paste0("beta_nmds_", beta_distance_slug, ".png"))
+safe_include_graphics(fig_beta_nmds)
+```
+
+```{r}
+#| fig-cap: "Figure 2S2. Sample-to-sample beta-diversity distance heatmap."
+#| out-width: "100%"
+fig_beta_heatmap <- ctx$paths$figures$beta_distance_heatmap_selected %||% file.path(job_dir, "figures", paste0("beta_distance_heatmap_", beta_distance_slug, ".png"))
+safe_include_graphics(fig_beta_heatmap)
+```
+
+```{r}
+beta_within_between_stats_path <- ctx$paths$tables$beta_within_between_stats %||% file.path(job_dir, "tables", "beta_within_between_stats.csv")
+beta_within_between_stats <- safe_read_csv(beta_within_between_stats_path)
+if (!is.null(beta_within_between_stats)) {
+  knitr::kable(beta_within_between_stats, caption = "Within-group versus between-group distance comparison")
+}
+```
+
+```{r}
+#| fig-cap: "Figure 2S3. Within-group versus between-group pairwise distance distribution."
+#| out-width: "85%"
+safe_include_graphics(ctx$paths$figures$beta_within_between_boxplot %||% file.path(job_dir, "figures", "beta_within_between_boxplot.png"))
+```
+
+```{r}
+beta_anosim_path <- ctx$paths$tables$beta_anosim %||% file.path(job_dir, "tables", "beta_anosim.csv")
+beta_anosim <- safe_read_csv(beta_anosim_path)
+if (!is.null(beta_anosim)) knitr::kable(beta_anosim, caption = "ANOSIM results")
+```
+
+```{r results='asis'}
+beta_ai_md <- ctx$paths$ai$beta_interpretation %||% file.path(job_dir, "ai", "beta_interpretation.md")
+if (file.exists(beta_ai_md)) {
+  safe_include_md_demote_h1(beta_ai_md)
+}
+```
+
+```{r results='asis'}
+if (is.list(beta_summary) && !is.null(beta_summary$reliability_notes) && length(beta_summary$reliability_notes) > 0) {
+  cat("**Beta diversity reliability notes**\n\n")
+  for (note in beta_summary$reliability_notes) {
+    cat("- ", note, "\n", sep = "")
+  }
+  cat("\n")
+}
+if (is.list(beta_summary) && !is.null(beta_summary$caution_notes) && length(beta_summary$caution_notes) > 0) {
+  cat("**Beta diversity caution notes**\n\n")
+  for (note in beta_summary$caution_notes) {
+    cat("- ", note, "\n", sep = "")
+  }
+  cat("\n")
+}
 ```
 
 ## Differential Abundance Analysis
@@ -312,30 +491,132 @@ safe_include_graphics(fig_beta)
 ```{r}
 diff_path <- ctx$paths$tables$differential_taxa %||% file.path(job_dir, "tables", "differential_taxa.csv")
 diff <- safe_read_csv(diff_path)
-if (!is.null(diff)) {
-  if (!"display_taxon" %in% names(diff) && "taxon" %in% names(diff)) diff$display_taxon <- display_taxon(diff$taxon)
-  # Prefer the dedicated significant table if present; otherwise, show the head of differential_taxa.
-  sig_path <- ctx$paths$tables$differential_taxa_significant %||% file.path(job_dir, "tables", "differential_taxa_significant.csv")
-  sig <- safe_read_csv(sig_path)
-  if (!is.null(sig) && nrow(sig) > 0) {
-    if (!"display_taxon" %in% names(sig) && "taxon" %in% names(sig)) sig$display_taxon <- display_taxon(sig$taxon)
-    show_cols <- intersect(c("display_taxon", "tax_level", "fdr", "log2fc", "mean_abundance", "prevalence", "taxon"), names(sig))
-    knitr::kable(sig[, show_cols, drop = FALSE], caption = paste("Significant taxa (n =", nrow(sig), ")"))
+diff_summary_path <- ctx$paths$json$diff_summary %||% file.path(job_dir, "json", "diff_summary.json")
+diff_summary <- safe_read_json(diff_summary_path)
+sig_path <- ctx$paths$tables$differential_taxa_significant %||% file.path(job_dir, "tables", "differential_taxa_significant.csv")
+sig <- safe_read_csv(sig_path)
+effect_path <- ctx$paths$tables$diff_effect_size %||% file.path(job_dir, "tables", "diff_effect_size.csv")
+effect_tbl <- safe_read_csv(effect_path)
+consensus_path <- ctx$paths$tables$diff_consensus %||% file.path(job_dir, "tables", "diff_consensus.csv")
+consensus_tbl <- safe_read_csv(consensus_path)
+lefse_path <- ctx$paths$tables$diff_lefse %||% file.path(job_dir, "tables", "diff_lefse.csv")
+lefse_tbl <- safe_read_csv(lefse_path)
+ancombc_path <- ctx$paths$tables$diff_ancombc %||% file.path(job_dir, "tables", "diff_ancombc.csv")
+ancombc_tbl <- safe_read_csv(ancombc_path)
+if (!is.null(diff) && "taxon" %in% names(diff) && !"display_taxon" %in% names(diff)) diff$display_taxon <- display_taxon(diff$taxon)
+if (!is.null(sig) && "taxon" %in% names(sig) && !"display_taxon" %in% names(sig)) sig$display_taxon <- display_taxon(sig$taxon)
+```
+
+```{r results='asis'}
+if (is.list(diff_summary)) {
+  n_sig <- diff_summary$n_significant_taxa %||% diff_summary$n_significant_fdr_0_05 %||% 0
+  n_total <- diff_summary$n_total_taxa %||% diff_summary$n_total_taxa_tested %||% if (is.data.frame(diff)) nrow(diff) else 0
+  n_trend <- diff_summary$n_trend_taxa %||% diff_summary$n_trend_fdr_0_1 %||% 0
+  test_method <- diff_summary$test_method %||% diff_summary$method %||% "Wilcoxon/Kruskal-Wallis"
+  cat(
+    paste0(
+      "Differential abundance at the **", diff_summary$tax_level %||% "selected taxonomic", "** level was evaluated across **",
+      diff_summary$group_variable %||% "the selected group", "** using **", test_method, "** with BH/FDR correction."
+    ),
+    "\n"
+  )
+  if (n_sig > 0) {
+    cat(paste0("Detected **", n_sig, "** FDR-significant taxa and **", n_trend, "** trend-level taxa out of **", n_total, "** tested taxa.\n"))
   } else {
-    show_cols <- intersect(c("display_taxon", "tax_level", "fdr", "log2fc", "mean_abundance", "prevalence", "taxon"), names(diff))
-    knitr::kable(utils::head(diff[, show_cols, drop = FALSE], 30), caption = "Differential taxa (first 30 rows; display_taxon shown)")
+    cat(paste0("No FDR-significant taxa were detected among **", n_total, "** tested taxa. Exploratory top taxa by raw p-value are shown below.\n"))
   }
 }
 ```
 
 ```{r}
-#| fig-cap: "Figure 3. Differential abundance summary (barplot)."
+#| fig-cap: "Figure 3. Differential abundance barplot."
 #| out-width: "100%"
-fig_diff <- ctx$paths$figures$diff_taxa_barplot %||% file.path(job_dir, "figures", "diff_taxa_barplot.png")
+fig_diff_top <- ctx$paths$figures$diff_top_barplot %||% file.path(job_dir, "figures", "diff_top_barplot.png")
+fig_diff_old <- ctx$paths$figures$diff_taxa_barplot %||% file.path(job_dir, "figures", "diff_taxa_barplot.png")
+fig_diff <- if (file.exists(fig_diff_top)) fig_diff_top else fig_diff_old
 safe_include_graphics(fig_diff)
 ```
 
-## AI-Constrained Interpretation
+```{r}
+#| fig-cap: "Figure 4. Differential abundance volcano plot."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$diff_volcano %||% file.path(job_dir, "figures", "diff_volcano.png"))
+```
+
+```{r}
+#| fig-cap: "Figure 5. Differential taxa heatmap."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$diff_heatmap %||% file.path(job_dir, "figures", "diff_heatmap.png"))
+```
+
+### Significant Taxa Table
+
+```{r}
+if (!is.null(sig) && is.data.frame(sig) && nrow(sig) > 0) {
+  show_cols <- intersect(c("display_taxon", "tax_level", "comparison", "group_mean_abundance", "log2FC", "p_value", "fdr", "direction"), names(sig))
+  knitr::kable(sig[, show_cols, drop = FALSE], caption = paste("FDR-significant taxa (n =", nrow(sig), ")"))
+} else if (!is.null(diff) && is.data.frame(diff) && nrow(diff) > 0) {
+  show_cols <- intersect(c("display_taxon", "tax_level", "comparison", "group_mean_abundance", "log2FC", "p_value", "fdr", "significance"), names(diff))
+  knitr::kable(utils::head(diff[, show_cols, drop = FALSE], 20), caption = "No FDR-significant taxa were detected; showing exploratory top taxa.")
+}
+```
+
+### Effect Size
+
+```{r}
+if (!is.null(effect_tbl) && is.data.frame(effect_tbl) && nrow(effect_tbl) > 0) {
+  knitr::kable(utils::head(effect_tbl, 20), caption = "Effect size summary (Top 20 rows)")
+}
+```
+
+### LEfSe / ANCOM-BC Availability
+
+```{r results='asis'}
+if (is.list(diff_summary)) {
+  cat(paste0("- LEfSe available: ", if (isTRUE(diff_summary$lefse_available)) "Yes" else "No", "\n"))
+  cat(paste0("- ANCOM-BC available: ", if (isTRUE(diff_summary$ancombc_available)) "Yes" else "No", "\n"))
+  cat(paste0("- Consensus table available: ", if (isTRUE(diff_summary$consensus_available)) "Yes" else "No", "\n"))
+}
+```
+
+```{r}
+if (!is.null(lefse_tbl) && is.data.frame(lefse_tbl) && nrow(lefse_tbl) > 0) {
+  knitr::kable(utils::head(lefse_tbl, 20), caption = "LEfSe results (Top 20 rows)")
+}
+```
+
+```{r}
+if (!is.null(ancombc_tbl) && is.data.frame(ancombc_tbl) && nrow(ancombc_tbl) > 0) {
+  knitr::kable(utils::head(ancombc_tbl, 20), caption = "ANCOM-BC results (Top 20 rows)")
+}
+```
+
+```{r}
+#| fig-cap: "Figure 6. LEfSe LDA score plot."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$diff_lefse_lda %||% file.path(job_dir, "figures", "diff_lefse_lda.png"))
+```
+
+### Consensus Results
+
+```{r}
+if (!is.null(consensus_tbl) && is.data.frame(consensus_tbl) && nrow(consensus_tbl) > 0) {
+  knitr::kable(consensus_tbl, caption = "Consensus differential taxa across available methods")
+}
+```
+
+### Caution Notes
+
+```{r results='asis'}
+if (is.list(diff_summary) && length(diff_summary$caution_notes %||% character(0)) > 0) {
+  for (note in diff_summary$caution_notes) {
+    cat("- ", note, "\n", sep = "")
+  }
+  cat("\n")
+}
+```
+
+## AI 绾︽潫瑙ｉ噴
 
 ```{r results='asis'}
 # Include pre-generated AI markdown only (no API calls in Phase 8).
@@ -412,31 +693,38 @@ safe_include_graphics(ctx$paths$figures$network_plot %||% file.path(job_dir, "fi
 
 Co-occurrence does not imply direct interaction.
 
-## Key Taxa Score
+## Key Taxa Hub
 
-KeyTaxaScore formula (Phase 7):
+The Key Taxa Hub integrates multiple evidence sources to identify candidate key taxa.
 
 ```text
 KeyTaxaScore =
-0.4 * DifferentialScore +
-0.4 * MLImportanceScore +
-0.2 * NetworkCentralityScore
+0.35 x DifferentialScore +
+0.30 x MLImportanceScore +
+0.25 x NetworkCentralityScore +
+0.10 x ConsensusScore
 
-DifferentialScore = normalized(-log10(FDR) * abs(log2FC))
-MLImportanceScore = normalized(Random Forest importance)
-NetworkCentralityScore = normalized(degree + betweenness)
+If a module result is missing, weights are automatically redistributed.
 ```
+
+### Reliability Classification
+
+- high_confidence: evidence_count >= 3
+- moderate_confidence: evidence_count == 2
+- exploratory: evidence_count == 1
+- weak_evidence: evidence_count == 0
+
+### Top Key Taxa Score Table
 
 ```{r}
 kt_path <- ctx$paths$tables$key_taxa_score %||% file.path(job_dir, "tables", "key_taxa_score.csv")
 kt <- safe_read_csv(kt_path)
 if (!is.null(kt) && is.data.frame(kt) && nrow(kt) > 0) {
   show_cols <- intersect(
-    c("display_taxon", "key_taxa_score", "recommendation_level", "evidence_sources", "evidence_count",
-      "differential_score", "ml_importance_score", "network_centrality_score", "tax_level"),
+    c("display_taxon", "key_taxa_score", "reliability_label", "evidence_count", "evidence_methods",
+      "differential_score", "ml_importance_score", "network_centrality_score", "consensus_score", "tax_level"),
     names(kt)
   )
-  # Main text: Top 20 only.
   ord_cols <- intersect(c("key_taxa_score", "evidence_count"), names(kt))
   if (length(ord_cols) > 0) {
     kt_show <- kt[order(-kt$key_taxa_score, -kt$evidence_count, kt$taxon), , drop = FALSE]
@@ -444,43 +732,58 @@ if (!is.null(kt) && is.data.frame(kt) && nrow(kt) > 0) {
     kt_show <- kt
   }
   kt_show <- utils::head(kt_show, 20)
-  knitr::kable(kt_show[, show_cols, drop = FALSE], caption = "Key Taxa Score (Top 20; display_taxon shown)")
+  knitr::kable(kt_show[, show_cols, drop = FALSE], caption = "Key Taxa Score (Top 20; multi-evidence)")
 }
 ```
 
+### Key Taxa Score Barplot
+
 ```{r}
-#| fig-cap: "Figure 7. Key Taxa Score barplot (Top ranked candidates)."
+#| fig-cap: "Figure 7a. Key Taxa Score barplot (Top ranked candidates, colored by reliability)."
 #| out-width: "100%"
 safe_include_graphics(ctx$paths$figures$key_taxa_score_barplot %||% file.path(job_dir, "figures", "key_taxa_score_barplot.png"))
 ```
 
-## Candidate Key Taxa Summary
+### Evidence Intersection
 
 ```{r}
-top20_path <- ctx$paths$tables$key_taxa_top20 %||% file.path(job_dir, "tables", "key_taxa_top20.csv")
-top20 <- safe_read_csv(top20_path)
-if (!is.null(top20) && is.data.frame(top20) && nrow(top20) > 0) {
-  if ("tax_level" %in% names(top20)) {
-    top20$tax_level_display <- ifelse(is.na(top20$tax_level) | top20$tax_level == "", "Feature-level", as.character(top20$tax_level))
-  }
-  keep <- intersect(c("display_taxon", "key_taxa_score", "recommendation_level", "evidence_sources", "rank"), names(top20))
-  top20_main <- top20[, keep, drop = FALSE]
-  # Main text: Top 10 by default.
-  top20_main <- utils::head(top20_main, 10)
-  knitr::kable(top20_main, caption = "Top candidate key taxa (Top 10; display_taxon shown)")
-}
+#| fig-cap: "Figure 7b. Evidence intersection showing taxa support across Differential/ML/Network/Consensus methods."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$key_taxa_upset %||% file.path(job_dir, "figures", "key_taxa_upset.png"))
 ```
+
+### Evidence Heatmap
+
+```{r}
+#| fig-cap: "Figure 7c. Evidence heatmap showing normalized scores across evidence types."
+#| out-width: "100%"
+safe_include_graphics(ctx$paths$figures$key_taxa_evidence_heatmap %||% file.path(job_dir, "figures", "key_taxa_evidence_heatmap.png"))
+```
+
+### AI Summary and Caution Notes
 
 ```{r}
 kt_sum_path <- ctx$paths$json$key_taxa_summary %||% file.path(job_dir, "json", "key_taxa_summary.json")
 if (file.exists(kt_sum_path)) {
   kt_sum <- tryCatch(jsonlite::read_json(kt_sum_path, simplifyVector = TRUE), error = function(e) NULL)
   if (is.list(kt_sum)) {
+    cat("**Available evidence modules:**", fmt_kv(kt_sum$available_evidence_modules), "\n\n")
+    cat("**Missing evidence modules:**", fmt_kv(kt_sum$missing_evidence_modules), "\n\n")
     cat("**Reliability:**", kt_sum$reliability, "\n\n")
-    cat("**Used sources:**", fmt_kv(kt_sum$used_sources), "\n\n")
+    cat("**High confidence taxa:**", kt_sum$high_confidence_count, "\n\n")
+    cat("**Moderate confidence taxa:**", kt_sum$moderate_confidence_count, "\n\n")
+    cat("**Exploratory taxa:**", kt_sum$exploratory_count, "\n\n")
+    if (!is.null(kt_sum$caution_notes) && length(kt_sum$caution_notes) > 0) {
+      cat("**Caution notes:**\n\n")
+      for (note in kt_sum$caution_notes) {
+        cat("- ", note, "\n")
+      }
+      cat("\n")
+    }
   }
 }
 ```
+
 
 ## Reproducibility Record
 
@@ -514,18 +817,39 @@ cat("**microeco version:**", tryCatch(as.character(utils::packageVersion("microe
 cat("**Generated outputs (expected):**\n\n")
 expected <- c(
   "tables/alpha_diversity.csv",
+  "tables/alpha_group_summary.csv",
+  "tables/alpha_stats.csv",
+  "tables/alpha_pairwise_stats.csv",
+  "tables/sequencing_depth_summary.csv",
+  "tables/rarefaction_summary.csv",
   "tables/beta_permanova.csv",
+  "tables/beta_dispersion.csv",
+  "tables/beta_nmds_summary.csv",
+  "tables/beta_anosim.csv",
+  "tables/beta_within_between_stats.csv",
   "tables/differential_taxa.csv",
   "tables/ml_feature_importance.csv",
   "tables/network_nodes.csv",
   "tables/key_taxa_score.csv",
-  "figures/alpha_shannon_boxplot.png",
+  "figures/alpha_shannon_violin_boxplot.png",
+  "figures/alpha_multi_index_facet.png",
+  "figures/sequencing_depth_barplot.png",
   "figures/beta_pcoa_bray.png",
+  "figures/beta_nmds_bray.png",
+  "figures/beta_distance_heatmap_bray.png",
+  "figures/beta_within_between_boxplot.png",
+  "figures/diff_top_barplot.png",
   "figures/diff_taxa_barplot.png",
+  "figures/diff_heatmap.png",
+  "figures/diff_effect_size_barplot.png",
+  "figures/diff_significance_summary.png",
   "figures/ml_importance.png",
   "figures/network_plot.png",
   "figures/key_taxa_score_barplot.png",
+  "json/alpha_summary.json",
+  "json/beta_summary.json",
   "json/key_taxa_summary.json",
+  "ai/beta_interpretation.md",
   "ai/diff_interpretation.md"
 )
 for (rel in expected) {
@@ -542,7 +866,17 @@ cat("**AI interpretation rule summary:** Phase 8 does not call any LLM API; it o
 ```{r}
 supp <- list(
   alpha_diversity = alpha_path,
+  alpha_group_summary = alpha_group_summary_path,
+  alpha_stats = alpha_stats_path,
+  alpha_pairwise_stats = alpha_pairwise_path,
+  sequencing_depth_summary = seq_depth_path,
+  rarefaction_summary = rare_path,
   beta_pcoa_coordinates = ctx$paths$tables$beta_pcoa_coordinates %||% file.path(job_dir, "tables", "beta_pcoa_coordinates.csv"),
+  beta_dispersion = ctx$paths$tables$beta_dispersion %||% file.path(job_dir, "tables", "beta_dispersion.csv"),
+  beta_nmds_summary = ctx$paths$tables$beta_nmds_summary %||% file.path(job_dir, "tables", "beta_nmds_summary.csv"),
+  beta_distance_matrix = ctx$paths$tables$beta_distance_matrix_selected %||% file.path(job_dir, "tables", paste0("beta_distance_matrix_", beta_distance_slug, ".csv")),
+  beta_within_between_stats = beta_within_between_stats_path,
+  beta_anosim = beta_anosim_path,
   differential_taxa = diff_path,
   ml_feature_importance = ml_imp_path,
   network_nodes = net_nodes_path,

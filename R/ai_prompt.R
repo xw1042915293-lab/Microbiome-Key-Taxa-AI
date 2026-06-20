@@ -27,7 +27,7 @@ build_llm_prompt_bundle <- function(job_dir) {
   )
 }
 
-build_llm_messages <- function(prompt_bundle) {
+build_llm_texts <- function(prompt_bundle) {
   system_text <- paste(
     c(
       "You are a cautious microbiome interpretation assistant.",
@@ -36,6 +36,10 @@ build_llm_messages <- function(prompt_bundle) {
       "Do not change statistical conclusions.",
       "Do not turn non-significant results into significant results.",
       "Do not infer causation or mechanisms.",
+      "Keep each markdown field concise and summarize at most 5 exploratory taxa.",
+      "Do not write one sentence per taxon when no FDR-significant taxa are present.",
+      "Do not describe mean abundance or prevalence in narrative prose; keep those in tables only.",
+      "Clearly separate FDR-significant taxa from exploratory trends.",
       "Return a single JSON object with keys diff_interpretation, methods, and figure_legends.",
       "Each value must be Markdown text."
     ),
@@ -44,14 +48,41 @@ build_llm_messages <- function(prompt_bundle) {
 
   user_text <- jsonlite::toJSON(prompt_bundle, auto_unbox = TRUE, pretty = TRUE, null = "null")
 
+  list(system_text = system_text, user_text = user_text)
+}
+
+build_llm_messages <- function(prompt_bundle) {
+  texts <- build_llm_texts(prompt_bundle)
+
   list(
-    list(role = "system", content = system_text),
-    list(role = "user", content = user_text)
+    list(role = "system", content = texts$system_text),
+    list(role = "user", content = texts$user_text)
   )
 }
 
 build_llm_request_payload <- function(job_dir, config) {
   bundle <- build_llm_prompt_bundle(job_dir)
+  provider <- if (exists("normalize_llm_provider", mode = "function")) normalize_llm_provider(config$provider) else "openai"
+  texts <- build_llm_texts(bundle)
+
+  if (identical(provider, "anthropic")) {
+    return(list(
+      model = config$model,
+      temperature = config$temperature,
+      max_tokens = config$max_tokens,
+      thinking = list(type = "disabled"),
+      system = texts$system_text,
+      messages = list(
+        list(
+          role = "user",
+          content = list(
+            list(type = "text", text = texts$user_text)
+          )
+        )
+      )
+    ))
+  }
+
   list(
     model = config$model,
     temperature = config$temperature,
@@ -67,7 +98,20 @@ extract_llm_json_text <- function(response) {
     content <- ""
   }
   if (!nzchar(content) && !is.null(response$content)) {
-    content <- response$content
+    if (is.character(response$content)) {
+      content <- response$content
+    } else if (is.data.frame(response$content) && "text" %in% names(response$content)) {
+      text_values <- response$content[["text"]]
+      text_values <- text_values[!is.na(text_values) & nzchar(as.character(text_values))]
+      if (length(text_values) > 0) {
+        content <- as.character(text_values[[1]])
+      }
+    } else if (is.list(response$content) && length(response$content) > 0) {
+      first_item <- response$content[[1]]
+      if (is.list(first_item) && !is.null(first_item$text)) {
+        content <- first_item$text
+      }
+    }
   }
   as.character(content)[1]
 }

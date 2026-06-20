@@ -18,6 +18,15 @@ mod_ai_interpretation_ui <- function(id) {
 mod_ai_interpretation_server <- function(id, state) {
   shiny::moduleServer(id, function(input, output, session) {
     output$diff_md <- shiny::renderUI({
+      if (!isTRUE(get_cfg("app.ai_enabled", FALSE))) {
+        return(
+          shiny::tags$div(
+            class = "kkai-alert kkai-alert--info",
+            shiny::tags$b("AI ????????"),
+            shiny::tags$div("????????? config.yml ?? app.ai_enabled ?? true?")
+          )
+        )
+      }
       if (is.null(state$job_dir)) {
         return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "当前没有活动任务，请先运行分析。"))
       }
@@ -41,6 +50,7 @@ mod_ai_interpretation_server <- function(id, state) {
     })
 
     output$llm_md <- shiny::renderUI({
+      if (!isTRUE(get_cfg("app.ai_enabled", FALSE))) return(NULL)
       if (is.null(state$job_dir)) return(NULL)
 
       path <- file.path(state$job_dir, "ai", "llm_diff_interpretation.md")

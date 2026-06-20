@@ -49,7 +49,7 @@ check_abundance_table <- function(abundance) {
   }
 
   feature_ids <- abundance[[1]]
-  if (any(is.na(feature_ids)) || any(feature_ids == "")) {
+  if (any(is.na(feature_ids)) || any(!is.na(feature_ids) & feature_ids == "")) {
     res <- add_check(res, "abundance_featureid_missing", "error", "FeatureID contains missing/empty values.")
   }
   if (anyDuplicated(feature_ids) > 0) {
@@ -83,7 +83,7 @@ check_metadata_table <- function(metadata) {
   if (!"SampleID" %in% names(metadata)) {
     return(add_check(res, "metadata_sampleid_col", "error", "Metadata must contain 'SampleID' column."))
   }
-  if (any(is.na(metadata$SampleID)) || any(metadata$SampleID == "")) {
+  if (any(is.na(metadata$SampleID)) || any(!is.na(metadata$SampleID) & metadata$SampleID == "")) {
     res <- add_check(res, "metadata_sampleid_missing", "error", "SampleID contains missing/empty values.")
   }
   if (anyDuplicated(metadata$SampleID) > 0) {
@@ -107,7 +107,7 @@ check_taxonomy_table <- function(taxonomy) {
   if (!"FeatureID" %in% names(taxonomy)) {
     return(add_check(res, "taxonomy_featureid_col", "error", "Taxonomy must contain 'FeatureID' column."))
   }
-  if (any(is.na(taxonomy$FeatureID)) || any(taxonomy$FeatureID == "")) {
+  if (any(is.na(taxonomy$FeatureID)) || any(!is.na(taxonomy$FeatureID) & taxonomy$FeatureID == "")) {
     res <- add_check(res, "taxonomy_featureid_missing", "error", "Taxonomy FeatureID contains missing/empty values.")
   }
   if (anyDuplicated(taxonomy$FeatureID) > 0) {
@@ -176,7 +176,7 @@ check_feature_matching <- function(abundance, taxonomy) {
 check_group_variable <- function(metadata, group_var) {
   res <- new_check_result()
   if (!is.data.frame(metadata)) return(add_check(res, "group_var_metadata_type", "error", "metadata must be a data.frame."))
-  if (is.null(group_var) || is.na(group_var) || !is.character(group_var) || length(group_var) != 1 || nchar(group_var) < 1) {
+  if (is.null(group_var) || length(group_var) != 1 || !is.character(group_var) || isTRUE(is.na(group_var)) || !nzchar(group_var)) {
     return(add_check(res, "group_var_provided", "warning", "No group variable selected yet."))
   }
   if (!group_var %in% names(metadata)) {
@@ -219,8 +219,9 @@ run_all_data_checks <- function(input_list, group_var = NULL) {
     check_group_variable(metadata, group_var)
   )) {
     out$checks <- dplyr::bind_rows(out$checks, r$checks)
-    if (r$status == "error") out$status <- "error"
-    if (r$status == "warning" && out$status == "pass") out$status <- "warning"
+    r_status <- as.character(r$status %||% "pass")
+    if (identical(r_status, "error")) out$status <- "error"
+    if (identical(r_status, "warning") && identical(out$status, "pass")) out$status <- "warning"
     if (!is.null(r$summary$groups) && length(r$summary$groups) > 0) out$summary$groups <- r$summary$groups
   }
 
@@ -241,3 +242,42 @@ save_data_check_summary <- function(check_result, job_dir) {
   normalizePath(out_path, winslash = "/", mustWork = TRUE)
 }
 
+# Safe wrapper around run_all_data_checks for the workflow state machine.
+# Catches exceptions and returns a valid check_result with error status,
+# so that "missing value where TRUE/FALSE needed" is surfaced with context.
+run_data_check <- function(abundance, metadata, taxonomy, group_var = NULL, job_dir = NULL) {
+  tryCatch(
+    {
+      result <- run_all_data_checks(
+        list(abundance = abundance, metadata = metadata, taxonomy = taxonomy),
+        group_var = group_var
+      )
+      # Safety: ensure check_df$status has no NA values
+      if (is.list(result) && !is.null(result$checks) && is.data.frame(result$checks)) {
+        result$checks$status[is.na(result$checks$status)] <- "warning"
+      }
+      result
+    },
+    error = function(e) {
+      msg <- conditionMessage(e)
+      warning("[run_data_check] Caught error: ", msg)
+      message("[run_data_check] DATA_CHECK_ERROR: ", msg)
+      tryCatch({
+        message("[run_data_check] TRACEBACK:")
+        tr <- sys.calls()
+        for (i in seq_along(tr)) {
+          message("  ", i, ": ", deparse(tr[[i]], width.cutoff = 200)[1])
+        }
+      }, error = function(e2) NULL)
+      list(
+        status = "error",
+        checks = tibble::tibble(
+          check_name = "data_check_exception",
+          status = "error",
+          message = paste0("run_data_check exception: ", msg)
+        ),
+        summary = list(n_samples = NA_integer_, n_features = NA_integer_, groups = list())
+      )
+    }
+  )
+}

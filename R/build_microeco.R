@@ -30,7 +30,7 @@ build_microeco_dataset <- function(abundance, metadata, taxonomy) {
 
   # Match ordering: columns(otu) must match rownames(sample_table)
   samples_abund <- colnames(otu)
-  if (!all(samples_abund %in% rownames(samp))) {
+  if (!all(samples_abund %in% rownames(samp), na.rm = TRUE)) {
     missing <- setdiff(samples_abund, rownames(samp))
     stop("build_microeco_dataset(): Samples missing in metadata: ", paste(missing, collapse = ", "), call. = FALSE)
   }
@@ -38,7 +38,10 @@ build_microeco_dataset <- function(abundance, metadata, taxonomy) {
 
   # Features: keep those present in both; if mismatch, validation already warned, but for object we take intersection.
   common_features <- intersect(rownames(otu), rownames(tax))
-  if (length(common_features) < 2) stop("build_microeco_dataset(): Too few features matched between abundance and taxonomy.", call. = FALSE)
+  if (length(common_features) == 0) stop("build_microeco_dataset(): No features matched between abundance and taxonomy (intersection is 0).", call. = FALSE)
+  if (length(common_features) < 2) warning("build_microeco_dataset(): Only ", length(common_features), " feature(s) matched between abundance and taxonomy.")
+  if (length(common_features) < nrow(otu)) message("[build_microeco_dataset] Note: ", nrow(otu) - length(common_features), " features in abundance not in taxonomy (dropped).")
+  if (length(common_features) < nrow(tax)) message("[build_microeco_dataset] Note: ", nrow(tax) - length(common_features), " features in taxonomy not in abundance (dropped).")
   otu <- otu[common_features, , drop = FALSE]
   tax <- tax[common_features, , drop = FALSE]
 

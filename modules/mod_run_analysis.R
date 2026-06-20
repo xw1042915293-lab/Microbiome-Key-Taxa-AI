@@ -142,6 +142,7 @@ mod_run_analysis_server <- function(id, state) {
         status,
         done = "kkai-badge kkai-badge--done",
         running = "kkai-badge kkai-badge--running",
+        warning = "kkai-badge kkai-badge--skipped",
         failed = "kkai-badge kkai-badge--failed",
         skipped = "kkai-badge kkai-badge--skipped",
         pending = "kkai-badge kkai-badge--pending",
@@ -321,13 +322,16 @@ mod_run_analysis_server <- function(id, state) {
 
         progress_cb <- function(step_id, status, detail = NULL) {
           status <- tolower(status %||% "")
-          if (!status %in% c("pending", "running", "done", "failed", "skipped")) status <- "running"
+          if (!status %in% c("pending", "running", "done", "failed", "skipped", "warning")) status <- "running"
 
           if (identical(status, "running")) {
             current_step_id(step_id)
             current_step_detail(detail %||% "")
           }
           set_step_status(step_id, status, detail = detail %||% "")
+
+          # Force Shiny to flush reactive updates so the step cards re-render
+          try(session$flushReact(), silent = TRUE)
 
           done_n <- sum(steps_state()$status %in% c("done", "skipped"))
           label <- steps_spec$step[steps_spec$step_id == step_id][1] %||% step_id

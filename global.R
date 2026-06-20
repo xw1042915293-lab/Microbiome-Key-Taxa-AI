@@ -27,6 +27,7 @@ source("R/analysis_alpha.R", local = TRUE)
 source("R/analysis_beta.R", local = TRUE)
 source("R/analysis_diff.R", local = TRUE)
 source("R/analysis_network.R", local = TRUE)
+source("R/ai_prompt.R", local = TRUE)
 source("R/report_render.R", local = TRUE)
 source("R/workflow_run.R", local = TRUE)
 
