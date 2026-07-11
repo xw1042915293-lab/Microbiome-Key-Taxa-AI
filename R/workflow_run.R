@@ -340,7 +340,8 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
                                        config_path = "config.yml",
                                        progress_cb = NULL,
                                        log_path = NULL,
-                                       state = NULL) {
+                                       state = NULL,
+                                       demo_mode = FALSE) {
   if (!is.list(input_data) || !all(c("abundance", "metadata", "taxonomy") %in% names(input_data))) {
     stop("run_full_analysis_workflow(): input_data must contain abundance/metadata/taxonomy.", call. = FALSE)
   }
@@ -469,7 +470,7 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
     ai_local <- NULL
   }
   ai_cfg <- read_llm_config(config_path)
-  api_key_present <- !is.null(read_api_key(ai_cfg$api_key_env))
+  api_key_present <- !isTRUE(demo_mode) && !is.null(read_api_key(ai_cfg$api_key_env))
   if (!isTRUE(api_key_present)) {
     ai_llm <- tryCatch(run_phase4b_workflow(job_dir = job_dir, config_path = config_path), error = function(e) e)
     if (inherits(ai_llm, "error")) {
@@ -601,6 +602,173 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
   }
 
   results
+}
+
+workflow_background_paths <- function(job_dir) {
+  assert_non_empty_string(job_dir, "job_dir")
+  list(
+    input = file.path(job_dir, "objects", "workflow_worker_input.rds"),
+    result = file.path(job_dir, "objects", "workflow_worker_result.rds"),
+    status = file.path(job_dir, "logs", "workflow_worker_status.rds"),
+    stdout = file.path(job_dir, "logs", "workflow_worker_stdout.log"),
+    stderr = file.path(job_dir, "logs", "workflow_worker_stderr.log"),
+    run_log = file.path(job_dir, "logs", "run.log")
+  )
+}
+
+start_background_analysis_workflow <- function(input_data, job_dir, group_var,
+                                               beta_distance = "bray", tax_level = "Genus",
+                                               config_path = "config.yml", progress_cb = NULL,
+                                               state, demo_mode = FALSE,
+                                               status_done = "full_workflow_done",
+                                               status_error = "full_workflow_error") {
+  workflow_assert_state(state, "start_background_analysis_workflow")
+  if (!requireNamespace("processx", quietly = TRUE)) {
+    stop("Background workflow cancellation requires the processx package.", call. = FALSE)
+  }
+  if (!is.list(input_data) || !all(c("abundance", "metadata", "taxonomy") %in% names(input_data))) {
+    stop("start_background_analysis_workflow(): invalid input_data.", call. = FALSE)
+  }
+  if (!dir.exists(job_dir)) stop("start_background_analysis_workflow(): job_dir not found.", call. = FALSE)
+  if (!is.null(state$wf_process) && inherits(state$wf_process, "process") && state$wf_process$is_alive()) {
+    stop("An analysis worker is already running.", call. = FALSE)
+  }
+
+  paths <- workflow_background_paths(job_dir)
+  ensure_dir(dirname(paths$input))
+  ensure_dir(dirname(paths$status))
+  unlink(c(paths$result, paths$status, paths$stdout, paths$stderr), force = TRUE)
+  saveRDS(input_data, paths$input)
+
+  project_dir <- normalizePath(getwd(), winslash = "/", mustWork = TRUE)
+  worker_script <- normalizePath(file.path(project_dir, "scripts", "workflow_worker.R"), winslash = "/", mustWork = TRUE)
+  config_abs <- normalizePath(file.path(project_dir, config_path), winslash = "/", mustWork = FALSE)
+  rscript <- file.path(R.home("bin"), "Rscript.exe")
+  if (!file.exists(rscript)) rscript <- file.path(R.home("bin"), "Rscript")
+
+  proc <- processx::process$new(
+    command = rscript,
+    args = c(
+      worker_script,
+      project_dir,
+      normalizePath(job_dir, winslash = "/", mustWork = TRUE),
+      normalizePath(paths$input, winslash = "/", mustWork = TRUE),
+      group_var, beta_distance, tax_level, config_abs,
+      if (isTRUE(demo_mode)) "1" else "0"
+    ),
+    wd = project_dir,
+    stdout = paths$stdout,
+    stderr = paths$stderr,
+    cleanup = TRUE,
+    supervise = TRUE,
+    windows_hide_window = TRUE
+  )
+
+  state$cancel_run <- FALSE
+  state$wf_process <- proc
+  state$wf_process_pid <- proc$get_pid()
+  state$wf_worker_status_path <- paths$status
+  state$wf_worker_result_path <- paths$result
+  state$wf_worker_input_path <- paths$input
+  state$wf_log_lines <- if (file.exists(paths$run_log)) length(readLines(paths$run_log, warn = FALSE)) else 0L
+  state$wf_error <- NULL
+  state$wf_args <- list(
+    job_dir = job_dir,
+    log_path = paths$run_log,
+    progress_cb = progress_cb,
+    status_done = status_done,
+    status_error = status_error
+  )
+  workflow_set_status(state, "running_full_workflow")
+  invisible(proc$get_pid())
+}
+
+.workflow_sync_background_log <- function(state) {
+  args <- state$wf_args %||% list()
+  log_path <- args$log_path %||% NULL
+  if (is.null(log_path) || !file.exists(log_path)) return(invisible(FALSE))
+  lines <- readLines(log_path, warn = FALSE, encoding = "UTF-8")
+  old_n <- as.integer(state$wf_log_lines %||% 0L)
+  if (length(lines) <= old_n) return(invisible(FALSE))
+  new_lines <- lines[seq.int(old_n + 1L, length(lines))]
+  state$wf_log_lines <- length(lines)
+  for (line in new_lines) {
+    match <- regexec("\\] (START|DONE|WARNING|SKIPPED|FAILED) ([^: ]+)(?:: (.*))?$", line, perl = TRUE)
+    parts <- regmatches(line, match)[[1L]]
+    if (length(parts) < 3L) next
+    status <- switch(parts[2L], START = "running", DONE = "done", WARNING = "warning", SKIPPED = "skipped", FAILED = "failed")
+    step_id <- parts[3L]
+    detail <- if (length(parts) >= 4L) parts[4L] else status
+    if (step_id %in% workflow_step_ids()) set_step_status(state, step_id, status, detail)
+    if (is.function(args$progress_cb)) try(args$progress_cb(step_id, status, detail), silent = TRUE)
+  }
+  invisible(TRUE)
+}
+
+poll_background_analysis_workflow <- function(state) {
+  workflow_assert_state(state, "poll_background_analysis_workflow")
+  proc <- state$wf_process
+  if (is.null(proc) || !inherits(proc, "process")) return(invisible("idle"))
+  .workflow_sync_background_log(state)
+  if (proc$is_alive()) return(invisible("running"))
+
+  exit_status <- tryCatch(proc$get_exit_status(), error = function(e) NA_integer_)
+  status_obj <- tryCatch(
+    if (!is.null(state$wf_worker_status_path) && file.exists(state$wf_worker_status_path)) readRDS(state$wf_worker_status_path) else NULL,
+    error = function(e) NULL
+  )
+  args <- state$wf_args %||% list()
+  completed <- identical(exit_status, 0L) && is.list(status_obj) && isTRUE(status_obj$ok)
+  if (completed) {
+    result <- tryCatch(readRDS(state$wf_worker_result_path), error = function(e) NULL)
+    restore_analysis_state_from_job(state, args$job_dir, job_id = state$job_id)
+    if (is.list(result)) {
+      state$dataset <- result$dataset %||% state$dataset
+      state$alpha_result <- result$alpha %||% NULL
+      state$beta_result <- result$beta %||% NULL
+      state$diff_result <- result$diff %||% NULL
+      state$ml_result <- result$ml %||% NULL
+      state$network_result <- result$network %||% NULL
+      state$key_taxa_result <- result$key_taxa %||% NULL
+    }
+    workflow_set_status(state, args$status_done %||% "full_workflow_done")
+    state$wf_error <- NULL
+  } else {
+    stderr_path <- workflow_background_paths(args$job_dir)$stderr
+    stderr <- if (file.exists(stderr_path)) tail(readLines(stderr_path, warn = FALSE), 20L) else character()
+    message <- status_obj$message %||% paste(stderr, collapse = "\n")
+    if (!nzchar(trimws(message %||% ""))) message <- paste0("Background analysis worker exited with status ", exit_status, ".")
+    state$wf_error <- message
+    workflow_set_status(state, args$status_error %||% "full_workflow_error")
+  }
+  if (!is.null(state$wf_worker_input_path)) unlink(state$wf_worker_input_path, force = TRUE)
+  state$wf_process <- NULL
+  state$wf_process_pid <- NULL
+  invisible(if (completed) "done" else "failed")
+}
+
+cancel_background_analysis_workflow <- function(state) {
+  workflow_assert_state(state, "cancel_background_analysis_workflow")
+  proc <- state$wf_process
+  if (is.null(proc) || !inherits(proc, "process") || !proc$is_alive()) {
+    state$cancel_run <- TRUE
+    return(invisible(FALSE))
+  }
+  current_step <- state$current_step %||% NULL
+  try(proc$kill_tree(), silent = TRUE)
+  try(proc$kill(), silent = TRUE)
+  try(proc$wait(2000), silent = TRUE)
+  if (!is.null(current_step) && current_step %in% workflow_step_ids()) {
+    set_step_status(state, current_step, "warning", "用户已终止任务")
+  }
+  state$cancel_run <- FALSE
+  state$wf_error <- "用户手动终止了任务"
+  state$wf_process <- NULL
+  state$wf_process_pid <- NULL
+  state$wf_idx <- NULL
+  if (!is.null(state$wf_worker_input_path)) unlink(state$wf_worker_input_path, force = TRUE)
+  workflow_set_status(state, "full_workflow_error")
+  invisible(TRUE)
 }
 
 setup_analysis_state_machine <- function(state, session) {
@@ -807,6 +975,11 @@ setup_analysis_state_machine <- function(state, session) {
     })
     
   }, ignoreInit = TRUE, once = FALSE, domain = session)
+
+  shiny::observe({
+    shiny::invalidateLater(250, session)
+    if (!is.null(state$wf_process)) poll_background_analysis_workflow(state)
+  }, domain = session)
 }
 
 trigger_analysis_state_machine <- function(input_data, job_dir, group_var, beta_distance = "bray", tax_level = "Genus", config_path = "config.yml", progress_cb = NULL, log_path = NULL, state = NULL, demo_mode = FALSE, status_running = "running_full_workflow", status_done = "full_workflow_done", status_error = "full_workflow_error") {

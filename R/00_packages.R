@@ -21,7 +21,8 @@ required_packages <- c(
   "vegan",
   "quarto",
   "markdown",
-  "igraph"
+  "igraph",
+  "processx"
 )
 
 missing <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]

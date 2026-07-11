@@ -10,6 +10,7 @@ source("tests/test_diff_analysis.R")
 source("tests/test_key_taxa_score.R")
 source("tests/test_network_analysis.R")
 source("tests/test_ml_analysis.R")
+source("tests/test_workflow_cancel.R")
 source("tests/test_workflow_state.R")
 
 cat("ok\n")

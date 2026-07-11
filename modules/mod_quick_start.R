@@ -285,15 +285,19 @@ mod_quick_start_server <- function(id, state) {
             session$ns("cancel_run"),
             "终止任务",
             class = "btn btn-danger",
-            style = "margin-left: 10px;"
+            style = "margin-left: 10px;",
+            onclick = "this.disabled=true; this.innerText='正在终止…';"
           )
         }
       )
     })
 
     shiny::observeEvent(input$cancel_run, {
-      state$cancel_run <- TRUE
-      shiny::showNotification("正在请求终止任务，将在当前步骤完成后停止...", type = "warning")
+      stopped <- cancel_background_analysis_workflow(state)
+      shiny::showNotification(
+        if (isTRUE(stopped)) "任务已终止。" else "已收到终止请求，将在当前步骤结束后停止。",
+        type = "warning"
+      )
     })
 
     output$workflow_status <- shiny::renderUI({
@@ -635,7 +639,7 @@ mod_quick_start_server <- function(id, state) {
           }
         }
 
-        trigger_analysis_state_machine(
+        start_background_analysis_workflow(
           input_data = state$input_data,
           job_dir = state$job_dir,
           group_var = group_var,
@@ -643,8 +647,8 @@ mod_quick_start_server <- function(id, state) {
           tax_level = input$tax_level %||% "Genus",
           config_path = "config.yml",
           progress_cb = progress_cb,
-          log_path = file.path(state$job_dir, "logs", "run.log"),
-          state = state
+          state = state,
+          demo_mode = isTRUE(state$demo_mode)
         )
 
       }, error = function(e) {
