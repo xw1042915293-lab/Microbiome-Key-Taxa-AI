@@ -34,6 +34,7 @@ prepare_report_context <- function(job_dir) {
       ml_permutation_test = p("tables", "ml_permutation_test.csv"),
       network_nodes = p("tables", "network_nodes.csv"),
       network_edges = p("tables", "network_edges.csv"),
+      network_statistics = p("tables", "network_statistics.csv"),
       key_taxa_score = p("tables", "key_taxa_score.csv"),
       key_taxa_top20 = p("tables", "key_taxa_top20.csv"),
       integration_debug = p("logs", "integration_debug.csv")
@@ -81,6 +82,9 @@ prepare_report_context <- function(job_dir) {
       ml_performance_distribution = p("figures", "ml_figure_performance_distribution.png"),
       ml_combined = p("figures", "ml_figure_combined.png"),
       network_plot = p("figures", "network_plot.png"),
+      network_combined = p("figures", "network_figure_combined.png"),
+      network_centrality = p("figures", "network_centrality.png"),
+      network_edge_composition = p("figures", "network_edge_composition.png"),
       key_taxa_score_barplot = p("figures", "key_taxa_score_barplot.png")
     )
   )

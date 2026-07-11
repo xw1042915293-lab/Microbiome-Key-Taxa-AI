@@ -447,14 +447,20 @@ if (file.exists(ml_results_path)) {
 
 ## Co-occurrence Network Analysis
 
+The network represents thresholded Spearman associations rather than direct ecological interactions. The publication figure shows a connected core for readability; complete nodes and edges remain available in the accompanying CSV files.
+
 ```{r}
 net_nodes_path <- ctx$paths$tables$network_nodes %||% file.path(job_dir, "tables", "network_nodes.csv")
 net_nodes <- safe_read_csv(net_nodes_path)
 if (!is.null(net_nodes) && is.data.frame(net_nodes) && nrow(net_nodes) > 0) {
   if (!"display_taxon" %in% names(net_nodes) && "name" %in% names(net_nodes)) net_nodes$display_taxon <- display_taxon(net_nodes$name)
-  show_cols <- intersect(c("display_taxon", "degree", "betweenness", "closeness", "mean_abundance", "prevalence"), names(net_nodes))
-  knitr::kable(utils::head(net_nodes[, show_cols, drop = FALSE], 30), caption = "Network nodes (first 30 rows; display_taxon shown)")
+  net_nodes <- net_nodes[order(net_nodes$degree, net_nodes$betweenness, decreasing = TRUE, na.last = TRUE), , drop = FALSE]
+  show_cols <- intersect(c("display_taxon", "phylum", "module", "degree", "betweenness", "closeness", "eigenvector", "mean_abundance", "prevalence"), names(net_nodes))
+  knitr::kable(utils::head(net_nodes[, show_cols, drop = FALSE], 20), digits = 4, caption = "Top hub taxa ranked by degree and betweenness")
 }
+
+net_stats <- safe_read_csv(ctx$paths$tables$network_statistics %||% file.path(job_dir, "tables", "network_statistics.csv"))
+if (!is.null(net_stats)) knitr::kable(net_stats, digits = 4, caption = "Network analysis summary")
 ```
 
 ```{r}
@@ -469,12 +475,27 @@ if (!is.null(net_edges) && is.data.frame(net_edges) && nrow(net_edges) > 0) {
 ```
 
 ```{r}
-#| fig-cap: "Figure 7. Co-occurrence network (Spearman correlation; co-occurrence does not imply direct interaction)."
+#| fig-cap: "Figure 7. Publication summary of the microbial co-occurrence network: core signed network, hub degree ranking, centrality relationships, and positive/negative association composition. Node size represents degree; node color represents phylum; edge width represents absolute Spearman correlation."
 #| out-width: "100%"
-safe_include_graphics(ctx$paths$figures$network_plot %||% file.path(job_dir, "figures", "network_plot.png"))
+network_figure <- ctx$paths$figures$network_combined %||% file.path(job_dir, "figures", "network_figure_combined.png")
+if (!file.exists(network_figure)) network_figure <- ctx$paths$figures$network_plot %||% file.path(job_dir, "figures", "network_plot.png")
+safe_include_graphics(network_figure)
 ```
 
-Co-occurrence does not imply direct interaction.
+```{r}
+network_methods_path <- file.path(job_dir, "network_methods.txt")
+network_results_path <- file.path(job_dir, "network_results_summary.txt")
+if (file.exists(network_methods_path)) {
+  cat("\n\n### Network methods\n\n")
+  cat(paste(readLines(network_methods_path, warn = FALSE, encoding = "UTF-8")[-1], collapse = "\n"))
+}
+if (file.exists(network_results_path)) {
+  cat("\n\n### Network result statement\n\n")
+  cat(paste(readLines(network_results_path, warn = FALSE, encoding = "UTF-8")[-1], collapse = "\n"))
+}
+```
+
+Co-occurrence does not imply direct interaction or causality.
 
 ## Key Taxa Score
 

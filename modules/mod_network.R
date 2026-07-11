@@ -23,15 +23,24 @@ mod_network_ui <- function(id) {
           ns("plot_choice"),
           "图形视图",
           choices = c(
+            "论文四联组合图" = "paper",
             "核心网络总览" = "overview",
-            "Top 10 hub taxa 标注图" = "labelled",
-            "Top 20 hub taxa degree 柱状图" = "degree"
+            "Hub taxa 标注图" = "labelled",
+            "Hub taxa degree 排名" = "degree",
+            "Degree–betweenness 中心性" = "centrality",
+            "正负相关边构成" = "edges"
           ),
-          selected = "overview"
+          selected = "paper"
         )
       ),
       shiny::uiOutput(ns("network_plot")),
       shiny::uiOutput(ns("plot_actions"))
+    ),
+    shiny::tags$div(style = "margin-top: 1rem;"),
+    bslib::card(
+      class = "kkai-card",
+      bslib::card_header("网络统计概况"),
+      DT::DTOutput(ns("stats_tbl"))
     ),
     shiny::tags$div(style = "margin-top: 1rem;"),
     bslib::card(
@@ -69,16 +78,19 @@ mod_network_server <- function(id, state) {
     }
 
     resolve_plot_file <- function(choice) {
-      choice <- choice %||% "overview"
+      choice <- choice %||% "paper"
       fig_dir <- state$job_dir %||% NULL
       if (is.null(fig_dir)) return(NULL)
       figs_dir <- file.path(fig_dir, "figures")
       candidates <- switch(
         choice,
+        paper = c("network_figure_combined.png", "network_plot.png"),
         overview = c("network_plot_overview.png", "network_plot.png"),
         labelled = c("network_plot_labelled.png"),
         degree = c("network_degree_barplot.png"),
-        c("network_plot_overview.png", "network_plot.png")
+        centrality = c("network_centrality.png"),
+        edges = c("network_edge_composition.png"),
+        c("network_figure_combined.png", "network_plot.png")
       )
       for (nm in candidates) {
         if (file.exists(file.path(figs_dir, nm))) return(nm)
@@ -93,11 +105,11 @@ mod_network_server <- function(id, state) {
     }
 
     selected_plot_file <- shiny::reactive({
-      resolve_plot_file(input$plot_choice %||% "overview")
+      resolve_plot_file(input$plot_choice %||% "paper")
     })
 
     selected_plot_pdf <- shiny::reactive({
-      resolve_plot_pdf(input$plot_choice %||% "overview")
+      resolve_plot_pdf(input$plot_choice %||% "paper")
     })
 
     shiny::observeEvent(state$job_dir, {
@@ -124,12 +136,12 @@ mod_network_server <- function(id, state) {
 
       bslib::card(
         class = "kkai-card",
-        bslib::card_header("网络图预览"),
+        bslib::card_header("论文级网络图预览"),
         shiny::tags$div(class = "kkai-result-image-wrap",
           shiny::tags$a(
-            href = file.path(fig_prefix(), png_file),
+            href = paste0(file.path(fig_prefix(), png_file), "?v=", as.numeric(file.info(file.path(state$job_dir, "figures", png_file))$mtime)),
             target = "_blank",
-            shiny::tags$img(src = file.path(fig_prefix(), png_file), class = "kkai-result-img kkai-result-img--small")
+            shiny::tags$img(src = paste0(file.path(fig_prefix(), png_file), "?v=", as.numeric(file.info(file.path(state$job_dir, "figures", png_file))$mtime)), class = "kkai-result-img")
           )
         )
       )
@@ -147,6 +159,8 @@ mod_network_server <- function(id, state) {
         ),
         shiny::downloadButton(ns("dl_plot_png"), "下载 PNG", class = "btn btn-outline-primary"),
         shiny::downloadButton(ns("dl_plot_pdf"), "下载 PDF", class = "btn btn-outline-primary"),
+        shiny::downloadButton(ns("dl_plot_svg"), "下载 SVG", class = "btn btn-outline-primary"),
+        shiny::downloadButton(ns("dl_plot_tiff"), "下载 TIFF 600 dpi", class = "btn btn-outline-primary"),
         shiny::downloadButton(ns("dl_nodes_csv"), "下载 network_nodes.csv", class = "btn btn-outline-dark"),
         shiny::downloadButton(ns("dl_edges_csv"), "下载 network_edges.csv", class = "btn btn-outline-dark")
       )
@@ -168,6 +182,34 @@ mod_network_server <- function(id, state) {
         file.copy(file.path(state$job_dir, "figures", selected_plot_pdf()), file, overwrite = TRUE)
       },
       contentType = "application/pdf"
+    )
+
+    selected_plot_variant <- function(extension) {
+      png <- selected_plot_file()
+      if (is.null(png)) return(NULL)
+      sub("\\.png$", paste0(".", extension), png)
+    }
+
+    output$dl_plot_svg <- shiny::downloadHandler(
+      filename = function() basename(selected_plot_variant("svg") %||% "network_figure.svg"),
+      content = function(file) {
+        shiny::req(state$job_dir)
+        src <- file.path(state$job_dir, "figures", selected_plot_variant("svg"))
+        shiny::validate(shiny::need(file.exists(src), "该历史任务没有 SVG 图，请重新运行网络分析。"))
+        file.copy(src, file, overwrite = TRUE)
+      },
+      contentType = "image/svg+xml"
+    )
+
+    output$dl_plot_tiff <- shiny::downloadHandler(
+      filename = function() basename(selected_plot_variant("tiff") %||% "network_figure.tiff"),
+      content = function(file) {
+        shiny::req(state$job_dir)
+        src <- file.path(state$job_dir, "figures", selected_plot_variant("tiff"))
+        shiny::validate(shiny::need(file.exists(src), "该历史任务没有 TIFF 图，请重新运行网络分析。"))
+        file.copy(src, file, overwrite = TRUE)
+      },
+      contentType = "image/tiff"
     )
 
     output$dl_nodes_csv <- shiny::downloadHandler(
@@ -206,6 +248,15 @@ mod_network_server <- function(id, state) {
       keep_cols <- intersect(c("display_taxon", "phylum", "degree", "betweenness", "closeness", "component", "mean_abundance", "prevalence"), names(df))
       df <- df[, keep_cols, drop = FALSE]
       DT::datatable(df, rownames = FALSE, options = list(pageLength = 20, dom = "tip", autoWidth = TRUE))
+    })
+
+    output$stats_tbl <- DT::renderDT({
+      if (is.null(state$job_dir)) return(DT::datatable(data.frame(Message = "当前没有活动任务。"), rownames = FALSE, options = list(dom = "t")))
+      path <- file.path(state$job_dir, "tables", "network_statistics.csv")
+      if (!file.exists(path)) return(DT::datatable(data.frame(Message = "历史任务暂无网络统计表，请重新运行网络分析。"), rownames = FALSE, options = list(dom = "t")))
+      df <- tryCatch(readr::read_csv(path, show_col_types = FALSE, progress = FALSE), error = function(e) NULL)
+      if (is.null(df)) return(DT::datatable(data.frame(Message = "网络统计表读取失败。"), rownames = FALSE, options = list(dom = "t")))
+      DT::datatable(df, rownames = FALSE, options = list(dom = "t", pageLength = 15, autoWidth = TRUE))
     })
 
     output$edges_tbl <- DT::renderDT({

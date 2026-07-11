@@ -172,7 +172,7 @@ build_spearman_network <- function(abund_matrix, rho_cutoff = 0.6, p_cutoff = 0.
 
   nodes <- data.frame(name = taxa, stringsAsFactors = FALSE)
   graph <- igraph::graph_from_data_frame(
-    d = if (nrow(edge_table) == 0) data.frame(from = character(), to = character(), stringsAsFactors = FALSE) else edge_table[, c("source", "target"), drop = FALSE],
+    d = if (nrow(edge_table) == 0) data.frame(from = character(), to = character(), stringsAsFactors = FALSE) else edge_table,
     directed = FALSE,
     vertices = nodes
   )
@@ -193,6 +193,7 @@ calculate_network_centrality <- function(graph) {
       closeness = numeric(),
       eigenvector = numeric(),
       component = integer(),
+      module = integer(),
       stringsAsFactors = FALSE
     ))
   }
@@ -210,6 +211,17 @@ calculate_network_centrality <- function(graph) {
   ev[!is.finite(ev)] <- 0
 
   comp <- igraph::components(graph)$membership
+  module <- if (igraph::ecount(graph) < 1L) {
+    seq_len(igraph::vcount(graph))
+  } else {
+    tryCatch(
+      as.integer(igraph::membership(igraph::cluster_louvain(
+        graph,
+        weights = if ("abs_rho" %in% igraph::edge_attr_names(graph)) igraph::E(graph)$abs_rho else NULL
+      ))),
+      error = function(e) as.integer(comp)
+    )
+  }
 
   data.frame(
     name = igraph::V(graph)$name,
@@ -218,6 +230,7 @@ calculate_network_centrality <- function(graph) {
     closeness = closeness,
     eigenvector = ev,
     component = as.integer(comp),
+    module = as.integer(module),
     stringsAsFactors = FALSE
   )
 }
@@ -227,10 +240,26 @@ augment_network_node_table <- function(node_table) {
   if (nrow(node_table) < 1) return(node_table)
 
   out <- node_table
-  out$display_taxon <- clean_taxon_label(out$name)
+  .paper_taxon_label <- function(value) {
+    parts <- trimws(strsplit(as.character(value), "\\|")[[1L]])
+    if (!length(parts)) return(as.character(value))
+    last <- parts[length(parts)]
+    if (!.is_missing_taxonomy(last)) return(last)
+    rank_prefix <- c("k", "p", "c", "o", "f", "g", "s")
+    taxonomy <- if (length(parts) > 1L) parts[-1L] else parts
+    for (i in rev(seq_along(taxonomy))) {
+      if (!.is_missing_taxonomy(taxonomy[i])) {
+        prefix <- rank_prefix[min(i, length(rank_prefix))]
+        return(paste0("Unclassified_", prefix, "__", taxonomy[i]))
+      }
+    }
+    parts[1L]
+  }
+  out$display_taxon <- vapply(out$name, .paper_taxon_label, character(1))
   out$display_taxon_short <- .short_node_label(out$display_taxon, max_chars = 36)
   out$phylum <- .extract_taxonomy_level(out$name, "Phylum")
   out$cluster_label <- paste0("Cluster ", out$component %||% NA_integer_)
+  out$module_label <- paste0("Module ", out$module %||% out$component %||% NA_integer_)
   out$color_group <- ifelse(.is_missing_taxonomy(out$phylum), out$cluster_label, out$phylum)
 
   ord <- order(out$degree, out$betweenness, decreasing = TRUE, na.last = TRUE)
@@ -248,9 +277,20 @@ select_core_network <- function(node_table, edge_table, top_n_nodes = 30, top_n_
     return(list(nodes = node_table, edges = edge_table, labelled_nodes = node_table))
   }
 
-  ord <- order(node_table$degree, node_table$betweenness, decreasing = TRUE, na.last = TRUE)
-  core_nodes <- node_table[ord, , drop = FALSE]
-  core_nodes <- utils::head(core_nodes, top_n_nodes)
+  connected <- node_table[is.finite(node_table$degree) & node_table$degree > 0, , drop = FALSE]
+  if (!nrow(connected)) connected <- node_table
+  ord <- order(connected$degree, connected$betweenness, connected$eigenvector, decreasing = TRUE, na.last = TRUE)
+  connected <- connected[ord, , drop = FALSE]
+  module_col <- if ("module" %in% names(connected)) "module" else "component"
+  module_ids <- unique(connected[[module_col]])
+  per_module <- max(1L, floor(top_n_nodes / max(1L, length(module_ids))))
+  balanced <- unlist(lapply(module_ids, function(module_id) {
+    which(connected[[module_col]] == module_id)[seq_len(min(per_module, sum(connected[[module_col]] == module_id)))]
+  }), use.names = FALSE)
+  fill <- setdiff(seq_len(nrow(connected)), balanced)
+  selected <- utils::head(c(balanced, fill), min(top_n_nodes, nrow(connected)))
+  core_nodes <- connected[selected, , drop = FALSE]
+  core_nodes <- core_nodes[order(core_nodes$degree, core_nodes$betweenness, decreasing = TRUE, na.last = TRUE), , drop = FALSE]
   core_names <- core_nodes$name
 
   core_edges <- edge_table[edge_table$source %in% core_names & edge_table$target %in% core_names, , drop = FALSE]
@@ -500,6 +540,249 @@ plot_network <- function(graph, node_table, edge_table, output_png, output_pdf) 
   ))
 }
 
+# Publication plotting helpers. These override the exploratory plotting entry
+# point above while preserving all historical filenames and return fields.
+.network_paper_palette <- c(
+  "#0072B2", "#D55E00", "#009E73", "#CC79A7",
+  "#E69F00", "#56B4E9", "#F0E442", "#6A3D9A"
+)
+
+compute_publication_network_layout <- function(node_table, edge_table) {
+  if (!is.data.frame(node_table) || !nrow(node_table)) return(list(nodes = node_table, edges = edge_table))
+  graph <- igraph::graph_from_data_frame(
+    if (nrow(edge_table)) edge_table else data.frame(from = character(), to = character()),
+    directed = FALSE,
+    vertices = node_table[, "name", drop = FALSE]
+  )
+  membership <- igraph::components(graph)$membership
+  component_ids <- sort(unique(membership))
+  component_sizes <- table(membership)
+  max_size <- max(component_sizes)
+  centers <- if (length(component_ids) == 1L) {
+    matrix(c(0, 0), ncol = 2L)
+  } else {
+    2.4 * igraph::layout_in_circle(igraph::make_ring(length(component_ids)))
+  }
+  coordinates <- matrix(0, nrow = igraph::vcount(graph), ncol = 2L)
+  rownames(coordinates) <- igraph::V(graph)$name
+  for (i in seq_along(component_ids)) {
+    vertices <- which(membership == component_ids[i])
+    subgraph <- igraph::induced_subgraph(graph, vids = vertices)
+    n <- igraph::vcount(subgraph)
+    sparse_circle <- n > 1L && max(igraph::degree(subgraph)) <= 2L
+    local <- if (n <= 1L) {
+      matrix(c(0, 0), ncol = 2L)
+    } else if (sparse_circle) {
+      igraph::layout_in_circle(subgraph)
+    } else {
+      set.seed(42L + i)
+      weights <- if ("abs_rho" %in% igraph::edge_attr_names(subgraph)) pmax(igraph::E(subgraph)$abs_rho, 0.01) else NULL
+      igraph::layout_with_fr(subgraph, weights = weights, niter = 1000L)
+    }
+    scale <- 0.65 + 0.65 * sqrt(n / max_size)
+    if (n > 1L) {
+      local <- if (sparse_circle) local * scale else igraph::norm_coords(local, xmin = -scale, xmax = scale, ymin = -scale, ymax = scale)
+    }
+    local[, 1L] <- local[, 1L] + centers[i, 1L]
+    local[, 2L] <- local[, 2L] + centers[i, 2L]
+    coordinates[igraph::V(subgraph)$name, ] <- local
+  }
+  positions <- data.frame(name = rownames(coordinates), x = coordinates[, 1L], y = coordinates[, 2L], stringsAsFactors = FALSE)
+  nodes <- merge(node_table, positions, by = "name", all.x = TRUE, sort = FALSE)
+  if (!nrow(edge_table)) return(list(nodes = nodes, edges = edge_table))
+  edges <- merge(edge_table, positions, by.x = "source", by.y = "name", all.x = TRUE, sort = FALSE)
+  names(edges)[names(edges) %in% c("x", "y")] <- c("x_source", "y_source")
+  edges <- merge(edges, positions, by.x = "target", by.y = "name", all.x = TRUE, sort = FALSE)
+  names(edges)[names(edges) %in% c("x", "y")] <- c("x_target", "y_target")
+  list(nodes = nodes, edges = edges)
+}
+
+.network_prepare_color_groups <- function(nodes, max_groups = 7L) {
+  group <- as.character(nodes$color_group)
+  group[is.na(group) | !nzchar(group)] <- "Unclassified"
+  counts <- sort(table(group), decreasing = TRUE)
+  keep <- names(utils::head(counts, max_groups))
+  group[!group %in% keep] <- "Other"
+  levels <- unique(c(keep, if (any(group == "Other")) "Other"))
+  nodes$paper_group <- factor(group, levels = levels)
+  nodes
+}
+
+make_publication_network_plot <- function(layout_data, label_nodes = TRUE,
+                                          title = "Core microbial co-occurrence network") {
+  nodes <- layout_data$nodes
+  edges <- layout_data$edges
+  if (!is.data.frame(nodes) || !nrow(nodes)) {
+    return(make_empty_network_plot(title, "No connected taxa passed the network thresholds.") + ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", color = NA)))
+  }
+  nodes <- .network_prepare_color_groups(nodes)
+  group_levels <- levels(nodes$paper_group)
+  palette <- stats::setNames(rep(.network_paper_palette, length.out = length(group_levels)), group_levels)
+  if ("Other" %in% group_levels) palette["Other"] <- "#999999"
+  module_count <- length(unique(nodes$module %||% nodes$component))
+  subtitle <- sprintf("%d connected taxa, %d strongest significant edges, %d modules; node size = degree", nrow(nodes), nrow(edges), module_count)
+
+  p <- ggplot2::ggplot()
+  if (is.data.frame(edges) && nrow(edges)) {
+    p <- p + ggplot2::geom_segment(
+      data = edges,
+      ggplot2::aes(
+        x = .data$x_source, y = .data$y_source,
+        xend = .data$x_target, yend = .data$y_target,
+        color = .data$sign, linewidth = .data$abs_rho,
+        linetype = .data$sign
+      ),
+      alpha = 0.48,
+      lineend = "round"
+    ) +
+      ggplot2::scale_color_manual(values = c(positive = "#C44E52", negative = "#2C7FB8"), drop = FALSE) +
+      ggplot2::scale_linetype_manual(values = c(positive = "solid", negative = "22"), guide = "none") +
+      ggplot2::scale_linewidth_continuous(range = c(0.35, 1.7), guide = "none")
+  }
+  p <- p +
+    ggplot2::geom_point(
+      data = nodes,
+      ggplot2::aes(.data$x, .data$y, size = .data$degree, fill = .data$paper_group),
+      shape = 21, color = "white", stroke = 0.65, alpha = 0.98
+    ) +
+    ggplot2::scale_fill_manual(values = palette, drop = FALSE) +
+    ggplot2::scale_size_continuous(range = c(3.2, 9)) +
+    ggplot2::coord_equal(clip = "off") +
+    ggplot2::labs(
+      title = title, subtitle = subtitle,
+      size = "Degree", fill = "Phylum", color = "Association"
+    ) +
+    ggplot2::theme_void(base_size = 11, base_family = "sans") +
+    ggplot2::theme(
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA),
+      plot.title = ggplot2::element_text(face = "bold", size = 14, color = "#17202A"),
+      plot.subtitle = ggplot2::element_text(size = 9.5, color = "#4D5B66"),
+      legend.position = "right",
+      legend.title = ggplot2::element_text(face = "bold"),
+      plot.margin = ggplot2::margin(12, 20, 12, 12)
+    )
+  if (isTRUE(label_nodes)) {
+    label_df <- nodes[order(nodes$hub_rank), , drop = FALSE]
+    label_df <- utils::head(label_df[!duplicated(label_df$display_taxon_short), , drop = FALSE], min(8L, nrow(label_df)))
+    if (nrow(label_df)) {
+      p <- p + ggrepel::geom_text_repel(
+        data = label_df,
+        ggplot2::aes(.data$x, .data$y, label = .data$display_taxon_short),
+        size = 3.2, color = "#17202A", fontface = "italic",
+        box.padding = 0.5, point.padding = 0.25,
+        min.segment.length = 0, max.overlaps = Inf, seed = 42,
+        segment.color = "#7F8C8D", segment.size = 0.35
+      )
+    }
+  }
+  p
+}
+
+make_network_centrality_plot <- function(node_table, top_n = 15L) {
+  nodes <- node_table[is.finite(node_table$degree) & node_table$degree > 0, , drop = FALSE]
+  if (!nrow(nodes)) return(make_empty_network_plot("Hub centrality", "No connected taxa available."))
+  nodes <- .network_prepare_color_groups(nodes)
+  group_levels <- levels(nodes$paper_group)
+  palette <- stats::setNames(rep(.network_paper_palette, length.out = length(group_levels)), group_levels)
+  if ("Other" %in% group_levels) palette["Other"] <- "#999999"
+  labels <- utils::head(nodes[order(nodes$hub_rank), , drop = FALSE], min(8L, nrow(nodes)))
+  ggplot2::ggplot(nodes, ggplot2::aes(.data$degree, .data$betweenness)) +
+    ggplot2::geom_point(ggplot2::aes(size = .data$eigenvector, fill = .data$paper_group), shape = 21, color = "white", stroke = 0.5, alpha = 0.9) +
+    ggrepel::geom_text_repel(data = labels, ggplot2::aes(label = .data$display_taxon_short), size = 3, seed = 42, max.overlaps = Inf) +
+    ggplot2::scale_fill_manual(values = palette, guide = "none") +
+    ggplot2::scale_size_continuous(range = c(2.5, 7), guide = "none") +
+    ggplot2::labs(title = "Hub taxa centrality", subtitle = "Candidates with high degree and betweenness occupy the upper-right region", x = "Degree", y = "Normalized betweenness") +
+    ggplot2::theme_classic(base_size = 11) +
+    ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", color = NA), plot.title = ggplot2::element_text(face = "bold"))
+}
+
+make_network_edge_summary_plot <- function(edge_table) {
+  if (!is.data.frame(edge_table) || !nrow(edge_table)) return(make_empty_network_plot("Association composition", "No significant edges available."))
+  values <- split(edge_table$abs_rho, edge_table$sign)
+  plot_df <- data.frame(
+    sign = names(values),
+    n = vapply(values, length, integer(1)),
+    median_abs_rho = vapply(values, stats::median, numeric(1), na.rm = TRUE),
+    stringsAsFactors = FALSE
+  )
+  plot_df$label <- sprintf("n = %d\nmedian |rho| = %.2f", plot_df$n, plot_df$median_abs_rho)
+  ggplot2::ggplot(plot_df, ggplot2::aes(.data$sign, .data$n, fill = .data$sign)) +
+    ggplot2::geom_col(width = 0.62) +
+    ggplot2::geom_text(ggplot2::aes(label = .data$label), vjust = -0.25, size = 3.4) +
+    ggplot2::scale_fill_manual(values = c(positive = "#C44E52", negative = "#2C7FB8"), guide = "none") +
+    ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0, 0.22))) +
+    ggplot2::labs(title = "Significant association composition", subtitle = "Edges satisfy both |rho| and FDR thresholds", x = NULL, y = "Number of edges") +
+    ggplot2::theme_classic(base_size = 11) +
+    ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", color = NA), plot.title = ggplot2::element_text(face = "bold"))
+}
+
+save_network_plot_formats <- function(plot_obj, base_path, width = 7, height = 5.5) {
+  ensure_dir(dirname(base_path))
+  paths <- c(pdf = paste0(base_path, ".pdf"), svg = paste0(base_path, ".svg"), tiff = paste0(base_path, ".tiff"), png = paste0(base_path, ".png"))
+  ggplot2::ggsave(paths[["pdf"]], plot_obj, width = width, height = height, device = grDevices::cairo_pdf, bg = "white")
+  ggplot2::ggsave(paths[["svg"]], plot_obj, width = width, height = height, device = grDevices::svg, bg = "white")
+  ggplot2::ggsave(paths[["tiff"]], plot_obj, width = width, height = height, dpi = 600, compression = "lzw", bg = "white")
+  ggplot2::ggsave(paths[["png"]], plot_obj, width = width, height = height, dpi = 300, bg = "white")
+  normalized <- normalizePath(paths, winslash = "/", mustWork = TRUE)
+  names(normalized) <- names(paths)
+  normalized
+}
+
+save_network_combined_figure <- function(plots, base_path, width = 11, height = 8.5) {
+  draw <- function() {
+    grid::grid.newpage()
+    grid::pushViewport(grid::viewport(layout = grid::grid.layout(2L, 2L)))
+    for (i in seq_len(4L)) {
+      row <- if (i <= 2L) 1L else 2L
+      col <- if (i %% 2L) 1L else 2L
+      print(plots[[i]] + ggplot2::labs(tag = LETTERS[i]), vp = grid::viewport(layout.pos.row = row, layout.pos.col = col))
+    }
+    grid::popViewport()
+  }
+  ensure_dir(dirname(base_path))
+  grDevices::cairo_pdf(paste0(base_path, ".pdf"), width = width, height = height, bg = "white"); draw(); grDevices::dev.off()
+  grDevices::png(paste0(base_path, ".png"), width = width, height = height, units = "in", res = 300, bg = "white"); draw(); grDevices::dev.off()
+  grDevices::tiff(paste0(base_path, ".tiff"), width = width, height = height, units = "in", res = 600, compression = "lzw", bg = "white"); draw(); grDevices::dev.off()
+  grDevices::svg(paste0(base_path, ".svg"), width = width, height = height, bg = "white"); draw(); grDevices::dev.off()
+  normalizePath(paste0(base_path, c(".pdf", ".png", ".tiff", ".svg")), winslash = "/", mustWork = TRUE)
+}
+
+plot_network <- function(graph, node_table, edge_table, output_png, output_pdf) {
+  if (!inherits(graph, "igraph")) stop("plot_network(): graph must be an igraph object.", call. = FALSE)
+  core <- select_core_network(node_table, edge_table, top_n_nodes = 30L, top_n_labels = 8L, top_n_edges = 100L)
+  layout_data <- compute_publication_network_layout(core$nodes, core$edges)
+  overview <- make_publication_network_plot(layout_data, label_nodes = FALSE, title = "Core microbial co-occurrence network")
+  labelled <- make_publication_network_plot(layout_data, label_nodes = TRUE, title = "Core network and candidate hub taxa")
+  degree <- make_network_degree_barplot(core$nodes, top_n = min(15L, nrow(core$nodes))) +
+    ggplot2::labs(title = "Top hub taxa by degree") +
+    ggplot2::theme_classic(base_size = 11) +
+    ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", color = NA), plot.title = ggplot2::element_text(face = "bold"))
+  centrality <- make_network_centrality_plot(node_table)
+  edge_summary <- make_network_edge_summary_plot(edge_table)
+  degree_combined <- degree + ggplot2::theme(legend.position = "none")
+  figs_dir <- dirname(output_png)
+  overview_paths <- save_network_plot_formats(overview, file.path(figs_dir, "network_plot_overview"), 8.2, 6.5)
+  labelled_paths <- save_network_plot_formats(labelled, file.path(figs_dir, "network_plot_labelled"), 8.2, 6.5)
+  degree_paths <- save_network_plot_formats(degree, file.path(figs_dir, "network_degree_barplot"), 7.2, 6)
+  centrality_paths <- save_network_plot_formats(centrality, file.path(figs_dir, "network_centrality"), 7, 5.5)
+  edge_paths <- save_network_plot_formats(edge_summary, file.path(figs_dir, "network_edge_composition"), 6.5, 5)
+  combined_paths <- save_network_combined_figure(list(labelled, degree_combined, centrality, edge_summary), file.path(figs_dir, "network_figure_combined"))
+  file.copy(file.path(figs_dir, "network_figure_combined.png"), output_png, overwrite = TRUE)
+  file.copy(file.path(figs_dir, "network_figure_combined.pdf"), output_pdf, overwrite = TRUE)
+  invisible(list(
+    png = normalizePath(output_png, winslash = "/", mustWork = TRUE),
+    pdf = normalizePath(output_pdf, winslash = "/", mustWork = TRUE),
+    overview_png = overview_paths[["png"]], overview_pdf = overview_paths[["pdf"]],
+    labelled_png = labelled_paths[["png"]], labelled_pdf = labelled_paths[["pdf"]],
+    degree_png = degree_paths[["png"]], degree_pdf = degree_paths[["pdf"]],
+    centrality_png = centrality_paths[["png"]], centrality_pdf = centrality_paths[["pdf"]],
+    edge_composition_png = edge_paths[["png"]], edge_composition_pdf = edge_paths[["pdf"]],
+    combined = combined_paths,
+    core_node_count = nrow(core$nodes), core_edge_count = nrow(core$edges)
+  ))
+}
+
 summarize_network_for_ai <- function(node_table, edge_table, rho_cutoff, p_cutoff, figure_paths = NULL) {
   if (!is.data.frame(node_table)) stop("summarize_network_for_ai(): node_table must be a data.frame.", call. = FALSE)
   if (!is.data.frame(edge_table)) stop("summarize_network_for_ai(): edge_table must be a data.frame.", call. = FALSE)
@@ -596,6 +879,7 @@ run_network_analysis <- function(dataset, tax_level = "Genus", job_dir, rho_cuto
       display_taxon_short = character(),
       phylum = character(),
       cluster_label = character(),
+      module_label = character(),
       color_group = character(),
       hub_rank = integer(),
       stringsAsFactors = FALSE
@@ -612,6 +896,29 @@ run_network_analysis <- function(dataset, tax_level = "Genus", job_dir, rho_cuto
   ensure_dir(dirname(out_nodes))
   readr::write_csv(node_table, out_nodes)
   readr::write_csv(edge_table, out_edges)
+
+  connected_nodes <- sum(node_table$degree > 0, na.rm = TRUE)
+  n_components <- if (igraph::vcount(graph)) igraph::components(graph)$no else 0L
+  n_modules <- if (nrow(node_table) && "module" %in% names(node_table)) length(unique(node_table$module[node_table$degree > 0])) else 0L
+  network_density <- if (igraph::vcount(graph) > 1L) igraph::edge_density(graph, loops = FALSE) else 0
+  modularity_value <- if (igraph::ecount(graph) > 0L && "module" %in% names(node_table)) tryCatch(
+    igraph::modularity(
+      graph,
+      membership = stats::setNames(node_table$module, node_table$name)[igraph::V(graph)$name],
+      weights = if ("abs_rho" %in% igraph::edge_attr_names(graph)) igraph::E(graph)$abs_rho else NULL
+    ),
+    error = function(e) NA_real_
+  ) else NA_real_
+  network_statistics <- data.frame(
+    metric = c("samples", "taxa_evaluated", "connected_taxa", "isolated_taxa", "significant_edges", "positive_edges", "negative_edges", "components", "modules", "density", "modularity", "rho_threshold", "fdr_threshold"),
+    value = c(
+      nrow(abund_matrix), ncol(abund_matrix), connected_nodes, nrow(node_table) - connected_nodes,
+      nrow(edge_table), sum(edge_table$sign == "positive", na.rm = TRUE), sum(edge_table$sign == "negative", na.rm = TRUE),
+      n_components, n_modules, network_density, modularity_value, rho_cutoff, p_cutoff
+    ),
+    stringsAsFactors = FALSE
+  )
+  readr::write_csv(network_statistics, file.path(job_dir, "tables", "network_statistics.csv"))
 
   plot_paths <- plot_network(
     graph = graph,
@@ -630,12 +937,21 @@ run_network_analysis <- function(dataset, tax_level = "Genus", job_dir, rho_cuto
       network_plot = c("figures/network_plot.png", "figures/network_plot.pdf"),
       overview = c("figures/network_plot_overview.png", "figures/network_plot_overview.pdf"),
       labelled = c("figures/network_plot_labelled.png", "figures/network_plot_labelled.pdf"),
-      degree_barplot = c("figures/network_degree_barplot.png", "figures/network_degree_barplot.pdf")
+      degree_barplot = c("figures/network_degree_barplot.png", "figures/network_degree_barplot.pdf"),
+      centrality = c("figures/network_centrality.png", "figures/network_centrality.pdf"),
+      edge_composition = c("figures/network_edge_composition.png", "figures/network_edge_composition.pdf"),
+      combined = c("figures/network_figure_combined.png", "figures/network_figure_combined.pdf", "figures/network_figure_combined.svg", "figures/network_figure_combined.tiff")
     )
   )
   summary$tax_level <- tax_level
   summary$n_samples <- nrow(abund_matrix)
   summary$n_taxa <- ncol(abund_matrix)
+  summary$n_connected_nodes <- connected_nodes
+  summary$n_isolated_nodes <- nrow(node_table) - connected_nodes
+  summary$n_components <- n_components
+  summary$n_modules <- n_modules
+  summary$density <- network_density
+  summary$modularity <- modularity_value
   summary$computation_scope <- list(
     retained_all_taxa = TRUE,
     original_taxa_count = ncol(abund_matrix)
@@ -646,12 +962,35 @@ run_network_analysis <- function(dataset, tax_level = "Genus", job_dir, rho_cuto
   summary$outputs <- list(
     nodes = "tables/network_nodes.csv",
     edges = "tables/network_edges.csv",
+    statistics = "tables/network_statistics.csv",
     summary = "json/network_summary.json",
     plot = c("figures/network_plot.png", "figures/network_plot.pdf"),
     overview_plot = c("figures/network_plot_overview.png", "figures/network_plot_overview.pdf"),
     labelled_plot = c("figures/network_plot_labelled.png", "figures/network_plot_labelled.pdf"),
-    degree_barplot = c("figures/network_degree_barplot.png", "figures/network_degree_barplot.pdf")
+    degree_barplot = c("figures/network_degree_barplot.png", "figures/network_degree_barplot.pdf"),
+    centrality_plot = c("figures/network_centrality.png", "figures/network_centrality.pdf"),
+    edge_composition_plot = c("figures/network_edge_composition.png", "figures/network_edge_composition.pdf"),
+    combined_figure = c("figures/network_figure_combined.png", "figures/network_figure_combined.pdf", "figures/network_figure_combined.svg", "figures/network_figure_combined.tiff")
   )
+
+  methods_lines <- c(
+    "Network analysis methods",
+    sprintf("Pairwise Spearman correlations were calculated across %d samples for %d taxa at the %s level.", nrow(abund_matrix), ncol(abund_matrix), tax_level),
+    sprintf("Edges required |rho| >= %.2f and Benjamini-Hochberg FDR < %.3f.", rho_cutoff, p_cutoff),
+    "Node degree, normalized betweenness, closeness, eigenvector centrality, connected components, and Louvain modules were calculated with igraph.",
+    "The publication figure displays a degree-balanced core of up to 30 connected taxa and the 100 strongest threshold-passing edges; complete results remain in network_nodes.csv and network_edges.csv.",
+    "Node color represents phylum, node size represents degree, edge color and line type represent association sign, and edge width represents absolute Spearman correlation.",
+    "Co-occurrence indicates statistical association and does not establish direct interaction or causality."
+  )
+  writeLines(methods_lines, file.path(job_dir, "network_methods.txt"), useBytes = TRUE)
+  results_lines <- c(
+    "Network analysis results",
+    sprintf("The thresholded network contained %d connected taxa and %d significant edges across %d detected modules.", connected_nodes, nrow(edge_table), n_modules),
+    sprintf("Positive and negative associations accounted for %d and %d edges, respectively.", sum(edge_table$sign == "positive", na.rm = TRUE), sum(edge_table$sign == "negative", na.rm = TRUE)),
+    sprintf("Network density was %.4f%s.", network_density, if (is.finite(modularity_value)) sprintf(" and modularity was %.3f", modularity_value) else ""),
+    "Hub taxa are association-network candidates and require validation; these results do not demonstrate ecological interaction or causality."
+  )
+  writeLines(results_lines, file.path(job_dir, "network_results_summary.txt"), useBytes = TRUE)
 
   summary_path <- write_json_pretty(summary, file.path(job_dir, "json", "network_summary.json"), auto_unbox = TRUE)
 
