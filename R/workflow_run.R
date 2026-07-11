@@ -190,8 +190,8 @@ run_phase3_workflow <- function(dataset, job_dir, group_var, tax_level = "Genus"
 }
 
 run_phase5_workflow <- function(dataset, job_dir, group_var, tax_level = "Genus",
-                                folds = 5L, repeats = 20L, permutations = 99L,
-                                seed = 1234L) {
+                                folds = 3L, repeats = 3L, permutations = 19L,
+                                seed = 1234L, trees = 200L) {
   if (is.null(dataset)) stop("run_phase5_workflow(): dataset is NULL.", call. = FALSE)
   assert_non_empty_string(job_dir, "job_dir")
   if (!dir.exists(job_dir)) stop("run_phase5_workflow(): job_dir not found: ", job_dir, call. = FALSE)
@@ -214,7 +214,8 @@ run_phase5_workflow <- function(dataset, job_dir, group_var, tax_level = "Genus"
     folds = folds,
     repeats = repeats,
     permutations = permutations,
-    seed = seed
+    seed = seed,
+    trees = trees
   )
 
   append_reproducibility(job_dir, list(

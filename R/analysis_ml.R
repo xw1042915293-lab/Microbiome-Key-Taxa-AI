@@ -471,7 +471,7 @@ prepare_ml_matrix <- function(dataset, group_var, tax_level = "Genus") {
   stats::setNames(as.numeric(raw), names(counts))
 }
 
-.ml_tune_random_forest <- function(x, y, trees = 500L, seed = 1L, use_class_weights = FALSE) {
+.ml_tune_random_forest <- function(x, y, trees = 200L, seed = 1L, use_class_weights = FALSE) {
   p <- ncol(x)
   mtry_grid <- unique(pmax(1L, pmin(p, as.integer(round(c(sqrt(p), p / 5, p / 3))))))
   nodesize_grid <- unique(c(1L, 5L))
@@ -482,7 +482,7 @@ prepare_ml_matrix <- function(dataset, group_var, tax_level = "Genus") {
   for (i in seq_len(nrow(grid))) {
     set.seed(as.integer(seed) + i)
     fits[[i]] <- randomForest::randomForest(
-      x = x, y = y, ntree = min(250L, as.integer(trees)),
+      x = x, y = y, ntree = min(100L, as.integer(trees)),
       mtry = grid$mtry[i], nodesize = grid$nodesize[i],
       classwt = classwt, importance = FALSE
     )
@@ -492,8 +492,8 @@ prepare_ml_matrix <- function(dataset, group_var, tax_level = "Genus") {
   list(mtry = grid$mtry[best], nodesize = grid$nodesize[best], oob_error = errors[best], grid = transform(grid, oob_error = errors))
 }
 
-run_repeated_cv_rf <- function(x, y, sample_ids = rownames(x), folds = 5L, repeats = 20L,
-                               seed = 1234L, trees = 500L, min_prevalence = 0.20,
+run_repeated_cv_rf <- function(x, y, sample_ids = rownames(x), folds = 3L, repeats = 3L,
+                               seed = 1234L, trees = 200L, min_prevalence = 0.20,
                                min_mean_abundance = 0.0001, transformation = "clr",
                                pseudocount = 1e-06, progress = NULL) {
   x <- as.data.frame(x, check.names = FALSE)
@@ -1315,8 +1315,8 @@ plot_ml_performance_distribution <- function(by_repeat) {
 run_ml_analysis <- function(dataset, group_var, tax_level = "Genus", job_dir,
                             min_prevalence = 0.20, min_mean_abundance = 0.0001,
                             transformation = "clr", pseudocount = 1e-06,
-                            folds = 5L, repeats = 20L, permutations = 999L,
-                            top_n = 15L, seed = 1234L, trees = 500L,
+                            folds = 3L, repeats = 3L, permutations = 19L,
+                            top_n = 15L, seed = 1234L, trees = 200L,
                             progress = NULL) {
   if (is.null(dataset)) stop("run_ml_analysis(): dataset is NULL.", call. = FALSE)
   assert_non_empty_string(job_dir, "job_dir")

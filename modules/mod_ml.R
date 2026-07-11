@@ -18,13 +18,13 @@ mod_ml_ui <- function(id) {
           selected = "clr"
         ),
         shiny::numericInput(ns("pseudocount"), "Pseudocount", value = 1e-06, min = 1e-12, step = 1e-06),
-        shiny::numericInput(ns("folds"), "交叉验证 folds", value = 5, min = 3, max = 10, step = 1),
-        shiny::numericInput(ns("repeats"), "交叉验证重复次数", value = 20, min = 1, max = 100, step = 1),
-        shiny::numericInput(ns("permutations"), "置换检验次数", value = 999, min = 0, max = 9999, step = 1),
+        shiny::numericInput(ns("folds"), "交叉验证 folds", value = 3, min = 3, max = 10, step = 1),
+        shiny::numericInput(ns("repeats"), "交叉验证重复次数", value = 3, min = 1, max = 100, step = 1),
+        shiny::numericInput(ns("permutations"), "置换检验次数", value = 19, min = 0, max = 9999, step = 1),
         shiny::numericInput(ns("top_n"), "Top taxa 数量", value = 15, min = 5, max = 50, step = 1),
         shiny::numericInput(ns("seed"), "随机种子", value = 1234, min = 1, step = 1),
         shiny::uiOutput(ns("run_button_ui")),
-        shiny::tags$p("置换检验用于评估模型性能是否显著优于随机分类。", class = "kkai-muted")
+        shiny::tags$p("当前为快速探索默认值（3-fold × 3 repeats，19 次置换）。论文最终分析建议改为 5 × 20 和 999 次置换。", class = "kkai-muted")
       ),
       bslib::navset_card_tab(
         bslib::nav_panel("数据概况", DT::DTOutput(ns("sample_summary_tbl"))),
