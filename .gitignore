@@ -1,9 +1,12 @@
 .Rhistory
 .RData
 .Rproj.user
+R/.Rhistory
 .claude/
 %TF%
  %TF%
+app_stdout.log
+app_stderr.log
 renv.lock.invalid.*
 renv/library/
 renv/staging/
@@ -11,3 +14,7 @@ uploads/*
 results/*
 database/*.sqlite
 database/*.db
+templates/.quarto/
+templates/report_template.html
+templates/report_template.tex
+templates/report_template.typ

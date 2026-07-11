@@ -1,121 +1,56 @@
-# Final Acceptance Summary (Phase 1-8)
+# V1.0 验收状态摘要
 
-Date: 2026-05-22
+## 1. 文档说明
 
-Scope: project organization only. No new features. No tests were run. No analysis code was modified.
+本文档用于记录“微生物组关键菌筛选与可信解释系统 V1.0”的总体验收状态。原 Phase 1—8 阶段记录形成于早期开发版本，只作为历史开发证据；正式申报结论以冻结版本重新执行的测试与验收为准。
 
-Sources used:
-- `docs/phase3_acceptance.md`
-- `docs/phase4b_acceptance.md`
-- `docs/phase5_acceptance.md`
-- `docs/phase6_acceptance.md`
-- `docs/phase7_acceptance.md`
-- `docs/phase8_acceptance.md`
-- `CURRENT_TASK.md`
-- `README.md`
+## 2. 功能完成情况
 
-Not read: `PROJECT_SPEC.md` (explicitly excluded).
+从当前代码结构和历史任务产物看，系统已实现以下功能模块：
 
-## 1) Phase 1-8 Acceptance Status
+| 模块 | 实现状态 | 代表性产物 |
+|---|---|---|
+| 数据导入与任务创建 | 已实现 | `input/`、`reproducibility.json` |
+| 数据质量检查 | 已实现 | `tables/data_check_summary.csv` |
+| Alpha 多样性 | 已实现 | 四项核心指标、总体检验、单指标图和概览图 |
+| Beta 多样性 | 已实现 | PCoA、PERMANOVA、PERMDISP 和六类论文图 |
+| 差异丰度 | 已实现 | 差异结果表、摘要 JSON 和图形 |
+| 受约束解释 | 已实现 | 本地解释、可选模型请求响应留痕 |
+| 机器学习筛选 | 已实现 | 特征重要性、模型指标和图形 |
+| 共现网络 | 已实现 | 节点表、边表、网络摘要和图形 |
+| 关键菌综合评分 | 已实现 | 完整评分、Top 列表和图形 |
+| 报告生成 | 已实现 | HTML/PDF 报告 |
+| 历史任务与下载 | 已实现 | 任务加载及结果下载界面 |
 
-| Phase | Status | Evidence |
-|---|---:|---|
-| Phase 1 | PASS | `CURRENT_TASK.md` (Previous Status); `README.md` (Phase 1 description) |
-| Phase 2 | PASS | `CURRENT_TASK.md` (Previous Status) |
-| Phase 3 | PASS | `docs/phase3_acceptance.md` |
-| Phase 4A | PASS | `CURRENT_TASK.md` (Previous Status). No dedicated `docs/phase4a_acceptance.md` found under `docs/`. |
-| Phase 4B | PASS | `docs/phase4b_acceptance.md` |
-| Phase 5 | PASS | `docs/phase5_acceptance.md` |
-| Phase 6 | PASS | `docs/phase6_acceptance.md` |
-| Phase 7 | PASS | `docs/phase7_acceptance.md` |
-| Phase 8 | PASS | `docs/phase8_acceptance.md` |
+## 3. 历史完整产物
 
-## 2) Final Passing job_dir
+现存的 `results/job_20260615_154839_z8zgot/` 包含输入、表格、图形、JSON、解释文本、R 对象、HTML 报告、PDF 报告、日志和可复现记录，可用于核对系统曾经形成的完整产物结构。
 
-Final accepted (Phase 8) job_dir:
+该任务不是 V1.0 最终申报验收任务，不应直接替代冻结版本的重新测试和截图。
 
-`D:/Microbiome Key Taxa AI/results/job_20260522_125641_fflx2v`
+## 4. 当前阻断项
 
-## 3) Core Artifacts by Phase (paths relative to job_dir)
+- 自动化测试与当前中文数据检查消息不同步；
+- 报告页面存在 `ns()` 未定义的动态界面错误；
+- 当前依赖环境与 `renv.lock` 状态需要核对；
+- 工作区包含大量尚未冻结的修改；
+- 正式申报用任务编号、截图和测试记录尚未生成。
 
-Note: For Phase 1/2/4A, no standalone acceptance record exists under `docs/` in this repo snapshot, so the artifact list follows the minimal set referenced by `README.md` and `CURRENT_TASK.md` (Phase 8 integration inputs/sections).
+详细信息见 `docs/TEST_REPORT.md`。
 
-### Phase 1 (Upload, persistence, mandatory checks)
+## 5. 最终验收条件
 
-- `tables/` (persisted upload CSV copies; exact filenames depend on the upload; per `README.md`)
+只有同时满足以下条件，才能将状态更新为“V1.0 验收通过”：
 
-### Phase 2 (Alpha/Beta diversity; used by Phase 8 report)
+1. 已知阻断项关闭；
+2. 软件名称、版本和界面文案统一；
+3. 自动化测试通过；
+4. Shiny 主要页面和下载操作检查通过；
+5. 使用示例数据完成一套新的全流程任务；
+6. HTML/PDF 报告能够打开，关键产物齐全；
+7. 最终截图和说明书引用同一任务；
+8. 源代码、依赖锁文件、文档和验收产物完成版本冻结。
 
-- `tables/alpha_diversity.csv`
-- `tables/alpha_stats.csv`
-- `tables/beta_pcoa_coordinates.csv`
-- `tables/beta_permanova.csv`
-- `figures/alpha_shannon_boxplot.png`
-- `figures/beta_pcoa_bray.png`
+## 6. 历史记录
 
-### Phase 3 (Differential abundance)
-
-- `tables/differential_taxa.csv`
-- `tables/differential_taxa_significant.csv`
-- `json/diff_summary.json`
-- `figures/diff_taxa_barplot.png`
-- `figures/diff_taxa_barplot.pdf`
-- `report/report.html` (confirmed in Phase 3 acceptance record)
-
-### Phase 4A (AI-constrained interpretation; non-LLM artifacts used by Phase 8)
-
-- `ai/diff_interpretation.md`
-- `ai/methods.md`
-- `ai/figure_legends.md`
-
-### Phase 4B (LLM interpretation artifacts; real API call can be skipped)
-
-- `json/llm_request_diff.json`
-- `json/llm_response_diff.json`
-- `ai/llm_diff_interpretation.md`
-- `ai/llm_methods.md`
-- `ai/llm_figure_legends.md`
-
-### Phase 5 (Machine learning biomarker screening; Random Forest)
-
-- `tables/ml_feature_importance.csv`
-- `tables/ml_model_metrics.csv`
-- `json/ml_summary.json`
-- `figures/ml_importance.png`
-- `figures/ml_importance.pdf`
-- `figures/ml_confusion_matrix.png`
-- `figures/ml_confusion_matrix.pdf`
-- Binary-only extra: `figures/ml_roc.png` and `figures/ml_roc.pdf`
-
-### Phase 6 (Co-occurrence network; Spearman correlation)
-
-- `tables/network_nodes.csv`
-- `tables/network_edges.csv`
-- `json/network_summary.json`
-- `figures/network_plot.png`
-- `figures/network_plot.pdf`
-
-### Phase 7 (Key Taxa Score)
-
-- `tables/key_taxa_score.csv`
-- `tables/key_taxa_top20.csv`
-- `json/key_taxa_summary.json`
-- `figures/key_taxa_score_barplot.png`
-- `figures/key_taxa_score_barplot.pdf`
-
-### Phase 8 (Final reproducible HTML report integration)
-
-- `report/report.html`
-
-## 4) Current Functional Closed Loop (as-is)
-
-1. Shiny app provides upload entry; each run creates `results/job_*/` and persists inputs under `job_dir/tables/` (Phase 1).
-2. Analysis outputs are generated into the same `job_dir` across Phase 2-7 (diversity, differential abundance, AI interpretation artifacts, ML screening, network analysis, Key Taxa Score).
-3. Phase 8 integrates existing artifacts into a single reproducible Quarto HTML report: `job_dir/report/report.html` (with methods, figure legends, supplementary tables, and a reproducibility record).
-4. LLM calls are not required for acceptance: Phase 4B skips real requests if `KKAI_API_KEY` is not set, and Phase 8 explicitly does not call any LLM API.
-
-## 5) Next Step Recommendations
-
-- README: add a "shortest path" runbook from upload to `report/report.html`, include an example `job_dir` tree, and add troubleshooting notes (Quarto + R deps, fonts/locale).
-- UI: improve per-job visibility in Shiny (status/progress, key artifact existence checks, report preview/download entry, clearer error messages).
-- Paper package: curate a submission-ready bundle from `report/report.html` (Methods, Figure legends, Supplementary tables, Reproducibility record) and maintain a mapping table of dataset/version/parameters.
+早期 Phase 3—8 验收碎片已从工作目录清理。其结论仅代表当时开发阶段，需要时可通过 Git 历史追溯，不作为 V1.0 当前验收依据。

@@ -1,139 +1,161 @@
-# Microbiome Key Taxa AI
+# 微生物组关键菌筛选与可信解释系统 V1.0
 
-## 项目简介
-Microbiome Key Taxa AI 是一个用于“关键菌/标志物筛选 + 可复现实验记录 + 报告生成”的 R Shiny 应用。用户上传 abundance / metadata / taxonomy 三张表后，系统会为每次运行创建独立的 `results/job_*/` 目录，并把分析中间结果、图表、JSON、AI 辅助文本与最终 `report.html` 全部固化到该 job 目录中，便于复现与答辩展示。
+**Microbiome Key Taxa AI** 是一套基于 R Shiny 的微生物组数据分析与报告生成应用。系统将数据检查、多样性分析、差异丰度分析、机器学习筛选、共现网络分析、关键菌综合评分和受约束结果解释组织为图形化流程，并为每次运行保存独立、可追溯的任务产物。
 
-## 核心功能
-- Upload Inputs: 上传并固化三类输入文件到 job 目录（同时记录 MD5 与可复现信息）。
-- Data Check: 必做数据校验，并将汇总保存为 `tables/data_check_summary.csv`。
-- Parameters: 从 metadata 中选择 `group_var`（分组变量），写入 `reproducibility.json`。
-- Run Full Workflow (Phase 2-8): 一键跑完整流程并写出核心产物（Alpha/Beta/Diff/ML/Network/Key Taxa/AI/Report）。
-- Alpha / Beta / Diff: 在 Shiny 内直接预览主要图表与显著差异结果。
-- Report: 基于 Quarto 模板渲染最终 HTML 报告，并在浏览器中打开。
+> 当前状态：V1.0 申报材料整理与版本冻结前。已知测试和报告页问题见 `docs/TEST_REPORT.md`，修复并重新验收前不应将当前工作区标记为正式发布版。
 
-## 技术栈
-- R 4.6.0
-- Shiny + bslib + DT
-- microeco + vegan + tidyverse 相关工具包（见 `renv.lock`）
-- Quarto（报告渲染：`quarto::quarto_render()`）
-- SQLite（作业与文件记录：DBI + RSQLite）
-- renv（依赖锁定与恢复：`.Rprofile` 自动 `source("renv/activate.R")`）
-- LLM/AI 配置：见 `config.yml`（如需启用对应能力，按配置项设置环境变量）
+## 核心能力
 
-## 目录结构
+- 导入并固化丰度表、样本信息表和分类注释表；
+- 检查必要字段、非法丰度、重复标识以及样本、特征对齐情况；
+- 完成 Alpha/Beta 多样性和差异丰度分析；
+- 使用随机森林进行探索性特征筛选；
+- 使用 Spearman 相关构建共现网络；
+- 融合差异、机器学习和网络证据，形成 Key Taxa Score；
+- 基于结构化统计结果生成受约束解释，避免显著性升级和因果化表述；
+- 使用 Quarto 生成 HTML/PDF 报告；
+- 浏览历史任务并下载报告、关键表格、图形或完整结果包。
+
+## 标准流程
+
 ```text
-.
-├─ app.R                    # Shiny 应用入口（页面导航与模块组装）
-├─ global.R                 # 全局加载：packages/config/R/ 与 modules/
-├─ config.yml               # 路径与 AI/LLM 参数配置
-├─ data/                    # 示例输入数据（用于演示/自检）
-├─ modules/                 # Shiny 模块：Upload/Data Check/Parameters/Run/Alpha/Beta/Diff/Report
-├─ R/                       # 业务逻辑与分析流程（本次交付整理不改动）
-├─ templates/               # Quarto 报告模板（report_template.qmd）
-├─ results/                 # 每次运行自动生成 job 目录（重要输出都在这里）
-├─ database/                # SQLite 数据库默认位置（database/app.sqlite）
-├─ uploads/                 # 上传缓存目录（如配置需要）
-└─ www/                     # 前端静态资源（CSS 等）
+导入三类数据
+→ 创建独立任务
+→ 数据质量检查
+→ 选择分组变量
+→ 运行完整分析
+→ 查看结果总览
+→ 生成报告
+→ 下载并归档任务产物
 ```
 
-## 安装依赖
-1. 安装 R（推荐与本项目一致的 R 4.6.0）。
-2. 安装 RStudio（Desktop 版即可）。
-3. 安装 Quarto（用于渲染 `report.html`）。
-4. 在项目根目录启动 R/RStudio，执行：
+## 技术组成
+
+- R、Shiny、bslib、DT；
+- microeco、vegan、randomForest、pROC 等分析组件；
+- SQLite 与文件系统任务目录；
+- Quarto 报告模板；
+- renv 依赖管理；
+- 可选的大模型 API。
+
+具体依赖版本以 `renv.lock` 为准。系统调用开源 R 包完成底层统计计算，自研重点是数据校验、工作流编排、任务管理、多证据评分、解释约束、界面展示和报告组织。
+
+## 项目结构
+
+```text
+.
+├─ app.R                     # Shiny 应用入口和页面组装
+├─ global.R                  # 配置、依赖和源文件加载
+├─ config.yml                # 路径、上传限制及可选模型配置
+├─ R/                        # 数据处理、分析、工作流和报告业务函数
+├─ modules/                  # Shiny 页面模块
+├─ templates/                # Quarto 与提示词模板
+├─ data/                     # 示例数据
+├─ tests/                    # 自动化测试
+├─ scripts/                  # 环境、测试和阶段验证脚本
+├─ docs/                     # 需求、设计、手册和申报材料
+├─ results/                  # 任务输出目录
+├─ database/                 # SQLite 默认位置
+├─ uploads/                  # 上传缓存目录
+└─ www/                      # 前端静态资源
+```
+
+## 安装与启动
+
+在项目根目录打开 R 或 RStudio，恢复依赖：
 
 ```r
-# 推荐：使用 renv 按锁定版本恢复依赖
 renv::restore()
 ```
 
-如果不使用 renv，也可以手动安装缺失包（见下方 FAQ）。
-
-## 启动方式
-在项目根目录执行：
+启动应用：
 
 ```r
 shiny::runApp()
 ```
 
-## 输入文件格式
-支持 `.tsv/.csv/.txt`（建议使用 tsv，首行为表头）。示例文件位于：
+命令行启动示例：
+
+```powershell
+Rscript -e "shiny::runApp('.', host='127.0.0.1', port=3850, launch.browser=TRUE)"
+```
+
+如果 `Rscript` 未加入 PATH，请使用 RStudio 或本机 `Rscript.exe` 的完整路径。
+
+## 输入格式
+
+支持 UTF-8 编码的 `.tsv`、`.csv` 和 `.txt`，推荐 TSV。
+
+| 文件 | 必要字段 | 主要要求 |
+|---|---|---|
+| 丰度表 | `FeatureID` | 其余列为样本，单元格为非负数值 |
+| 样本信息表 | `SampleID` | 标识唯一，并至少有一个有效分组变量 |
+| 分类注释表 | `FeatureID` | 特征与丰度表对应，建议包含 Genus 等层级 |
+
+示例文件：
+
 - `data/example_abundance.tsv`
 - `data/example_metadata.tsv`
 - `data/example_taxonomy.tsv`
 
-### 1) Abundance（丰度表）
-- 第一列必须是特征 ID（示例为 `FeatureID`）。
-- 其余列为样本列名（如 `Sample1...`），必须与 metadata 的 `SampleID` 一致。
-- 单元格为非负数值（计数或相对丰度均可，建议不要混用）。
+## 任务输出
 
-### 2) Metadata（样本信息表）
-- 必须包含 `SampleID` 列。
-- 其余列为可选分组变量（例如 `Group`、`Treatment`），用于后续差异/机器学习等。
+每次运行创建 `results/job_YYYYMMDD_HHMMSS_xxxxxx/`：
 
-### 3) Taxonomy（分类注释表）
-- 第一列必须是 `FeatureID`，与 abundance 第一列一一对应。
-- 其余列为分类层级（示例：`Kingdom/Phylum/Class/Order/Family/Genus`）。
-
-## 分析流程（Shiny 页面顺序）
-1. Upload Data: 依次上传 abundance/metadata/taxonomy，点击 `Create Job & Save Inputs` 创建 job 并固化输入。
-2. Data Check: 点击 `Run Data Check` 做必需校验（汇总会写到 `tables/data_check_summary.csv`）。
-3. Parameters: 选择 `Group variable`（group_var），点击 `Save Parameters`。
-4. Run Analysis: 点击 `Run Full Workflow (Phase 2-8)` 一键运行并生成全套结果文件。
-5. Alpha / Beta / Diff: 在对应 tab 预览关键图与差异结果。
-6. Report: 点击 `Render HTML Report` 生成 `report/report.html` 并通过 `Open Report` 打开。
-
-## 输出结果说明（每次运行一个 job 目录）
-每个 job 会生成一个目录：`results/job_YYYYMMDD_HHMMSS_xxxxxx/`，核心子目录：
-- `input/`: 固化后的输入（统一重命名为 `abundance.tsv/metadata.tsv/taxonomy.tsv`）
-- `tables/`: 表格产物（alpha/beta/diff/ml/network/key_taxa 等）
-- `figures/`: 关键图（alpha/beta/diff/ml/network/key_taxa 等）
-- `json/`: 结构化汇总与（如启用）LLM 请求/响应记录
-- `ai/`: AI/LLM 辅助生成的解释、方法与图例文本（Markdown）
-- `report/`: `report.html`（最终交付展示）
-- `logs/`: 错误日志（如运行失败会写入 `logs/error.log`）
-- `reproducibility.json`: 复现记录（输入文件 MD5、参数等）
-
-常见关键文件（完整跑通后应存在）：
-- `report/report.html`
-- `tables/alpha_diversity.csv`, `tables/alpha_stats.csv`
-- `tables/beta_pcoa_coordinates.csv`, `tables/beta_permanova.csv`
-- `tables/differential_taxa.csv`, `tables/differential_taxa_significant.csv`
-- `tables/ml_feature_importance.csv`, `tables/ml_model_metrics.csv`
-- `tables/network_nodes.csv`, `tables/network_edges.csv`
-- `tables/key_taxa_score.csv`, `tables/key_taxa_top20.csv`
-- `figures/alpha_shannon_boxplot.png`, `figures/beta_pcoa_bray.png`, `figures/diff_volcano.png`
-- `figures/ml_importance.png`, `figures/network_plot.png`, `figures/key_taxa_score_barplot.png`
-- `json/*_summary.json`, `ai/*.md`, `reproducibility.json`
-
-## 常见问题（FAQ）
-### 1) Missing required R packages
-启动时报错类似 `Missing required R packages: ...`：
-- 优先执行 `renv::restore()`；或对缺失包执行 `install.packages("包名")`。
-
-### 2) randomForest 包缺失
-机器学习相关步骤可能需要 `randomForest`：
-```r
-install.packages("randomForest")
+```text
+job_xxx/
+├─ input/                    # 输入副本
+├─ alpha/                    # Alpha 专属结果
+│  ├─ tables/               # Alpha 指标和统计表
+│  └─ figures/              # 按指标、图形类型分类的 PNG/PDF
+├─ beta/                     # Beta 专属结果
+│  ├─ tables/               # PCoA、PERMANOVA、PERMDISP
+│  └─ figures/              # 论文级 PCoA 和离散度诊断图
+├─ tables/                   # CSV 结果表
+├─ figures/                  # PNG/PDF 图形
+├─ json/                     # 结构化摘要和可选模型留痕
+├─ ai/                       # 方法、图例和解释文本
+├─ objects/                  # R 对象
+├─ report/                   # HTML/PDF 报告
+├─ logs/                     # 运行日志
+└─ reproducibility.json      # 文件校验值、参数和阶段状态
 ```
-安装后重启 R 会话再运行。
 
-### 3) Quarto 不可用 / report.html 无法生成
-- 需要安装 Quarto（桌面程序），并确保系统可调用。
-- 同时需要 R 包 `quarto`（本项目依赖中包含，但仍可能因环境问题缺失）。
-- 若报错，查看 job 目录下的 `logs/error.log`（以及 R 控制台输出）。
+Alpha 和 Beta 图形均不与其他分析图片混放。Alpha 在 `alpha/figures/` 下按指标和图形类型分类；Beta 在 `beta/figures/pcoa/` 保存论文级排序图，在 `beta/figures/dispersion/` 保存组内离散度诊断图。
 
-### 4) 没有选择 group variable
-Run Analysis 报错 `group_var not set`：
-- 先到 `Parameters` 选择分组变量（来自 metadata，除 `SampleID` 外的列），点击 `Save Parameters`。
+报告只引用当前任务中已经落盘的分析产物，不在渲染阶段重新执行统计计算。
 
-### 5) report.html 没生成
-常见原因：
-- 未先完成 `Run Full Workflow`（报告依赖 job 目录已有结果文件）。
-- Quarto 环境不可用（见上条）。
-- 渲染失败可在 Shiny 通知中看到错误信息，并检查 `logs/error.log`。
+## 测试
 
-## 当前限制
-- 当前一键流程中部分参数为固定默认值（例如 `beta_distance = "bray"`、`tax_level = "Genus"`）。
-- 输入文件需要严格满足列名约定：metadata 必须有 `SampleID`；abundance/taxonomy 必须有 `FeatureID`，且样本/特征需要能正确对齐。
-- `report.html` 依赖 Quarto 环境；不同机器的 Quarto 安装情况会直接影响报告渲染。
+自动化测试入口：
+
+```powershell
+Rscript scripts/run_tests.R
+```
+
+项目还包含各阶段 smoke 脚本。正式发布或申报前，应在冻结版本上执行自动化测试、应用启动检查和一次完整示例流程，并更新测试报告。
+
+## 结果解释边界
+
+- 差异和多样性结果表示统计关联，不直接证明因果关系；
+- 随机森林结果用于探索性特征筛选；
+- 共现网络的边不代表直接相互作用；
+- Key Taxa Score 用于候选优先级排序，不等于实验验证；
+- 自动解释不能替代专业判断和人工审核。
+
+## 文档导航
+
+- 软件统一信息：`docs/SOFTWARE_PROFILE.md`
+- 软著材料说明：`docs/SOFTWARE_COPYRIGHT_SUBMISSION.md`
+- 需求规格说明：`docs/SYSTEM_REQUIREMENTS.md`
+- 系统设计说明：`docs/SYSTEM_DESIGN.md`
+- 用户操作手册：`docs/USER_GUIDE.md`
+- 测试与验收记录：`docs/TEST_REPORT.md`
+- 创新点与边界：`docs/INNOVATION_POINTS.md`
+
+## 安全提示
+
+- 不要将 API 密钥写入源代码、配置样例、截图或结果包；
+- 导入真实研究数据前完成必要的授权和去标识化；
+- 任务压缩包包含输入副本，传递前应检查数据敏感性；
+- 正式归档时同时保存冻结代码、`renv.lock`、完整任务和最终报告。

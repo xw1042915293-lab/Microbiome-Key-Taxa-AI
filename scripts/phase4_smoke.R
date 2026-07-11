@@ -3,8 +3,8 @@ job_dirs <- list.dirs(results_root, recursive = FALSE, full.names = TRUE)
 job_dirs <- sort(job_dirs, decreasing = TRUE)
 
 required_inputs <- c(
-  file.path("tables", "alpha_stats.csv"),
-  file.path("tables", "beta_permanova.csv"),
+  file.path("alpha", "tables", "alpha_stats.csv"),
+  file.path("beta", "tables", "beta_permanova.csv"),
   file.path("tables", "differential_taxa.csv"),
   file.path("tables", "differential_taxa_significant.csv"),
   file.path("json", "diff_summary.json")

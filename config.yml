@@ -13,9 +13,9 @@ default:
     timeout_sec: 120
     prompt_version: "v0"
   llm:
-    provider: ""
-    base_url: ""
-    model: ""
-    api_key_env: ""
+    provider: "anthropic"
+    base_url: "https://api.deepseek.com/anthropic"
+    model: "deepseek-v4-flash"
+    api_key_env: "DEEPSEEK_API_KEY"
     temperature: 0.2
-    max_tokens: 1200
+    max_tokens: 4000

@@ -1,23 +1,28 @@
-# 方法描述（METHODS DESCRIPTION）
+# 微生物组关键菌筛选与可信解释系统 V1.0
 
-本文档用于硕士论文/开题报告中的“方法实现”章节撰写，强调本系统是 microeco 2.0 上层应用；机器学习与网络为探索性分析；AI 解释不做因果结论。
+## 分析方法说明
+
+本文档用于软件说明书、论文或开题报告中的“方法实现”部分。系统是 microeco 等分析组件的上层应用；机器学习、网络和综合评分用于探索性候选筛选；自动解释不作因果或机制结论。
 
 ## 1. Alpha diversity 方法
 数据来源：
 - 使用 microeco 2.0 数据对象（microtable）中的样本表与丰度表。
 
 计算：
-- 调用 microeco 的 Alpha 多样性计算接口生成多样性指标表（系统以 Shannon 指数作为必须输出与展示的核心指标）。
+- 调用 microeco 的 Alpha 多样性计算接口生成样本级多样性指标表。
+- 核心展示包括 Observed（观测丰富度）、Chao1（估计丰富度）、Shannon（丰富度与均匀度）和 Simpson（优势度敏感）四项指标。
 
-组间检验（Shannon）：
-- 若分组变量 `group_var` 仅包含 2 组：使用 Wilcoxon 秩和检验（`wilcox.test(Shannon ~ group)`）。
-- 若包含 3 组及以上：使用 Kruskal-Wallis 检验（`kruskal.test(Shannon ~ group)`）。
-- 对 p 值做 FDR 校正：`p.adjust(p_value, method = "fdr")`。
+组间检验：
+- 对四项核心指标分别进行总体组间检验。
+- 若分组变量 `group_var` 仅包含 2 组：使用 Wilcoxon 秩和检验。
+- 若包含 3 组及以上：使用 Kruskal-Wallis 检验。
+- 对四项检验的 p 值统一进行 FDR 校正：`p.adjust(p_value, method = "fdr")`。
 
 输出：
-- `tables/alpha_diversity.csv`：包含 `SampleID`、Alpha 指标列与分组列。
-- `tables/alpha_stats.csv`：Shannon 的检验方法、p 值、FDR、样本数与组数。
-- `figures/alpha_shannon_boxplot.png/.pdf`：箱线图 + 抖动散点。
+- `alpha/tables/alpha_diversity.csv`：包含 `SampleID`、Alpha 指标列与分组列。
+- `alpha/tables/alpha_stats.csv`：四项核心指标的检验方法、p 值、FDR、样本数与组数。
+- `alpha/figures/<metric>/`：各指标的箱线、小提琴、雨云式、散点与中位数、均值±标准误、均值±95%置信区间及中位数±四分位距图。
+- `alpha/figures/overview/`：上述七类四指标概览图。
 
 解释边界：
 - 仅报告统计关联，不推断因果机制。
@@ -34,10 +39,18 @@
 组间差异检验：
 - 使用 PERMANOVA：`vegan::adonis2(dist_obj ~ group, permutations = 999)`。
 
+离散度诊断：
+- 使用 `vegan::betadisper(type = "median", bias.adjust = TRUE)` 计算样本到组中位中心的距离。
+- 使用 `vegan::permutest(..., permutations = 999)` 检验各组离散度是否一致。
+- 解释 PERMANOVA 时同时报告 PERMDISP；若 PERMDISP 显著，应谨慎区分组中心差异与组内变异程度差异。
+
 输出：
-- `tables/beta_pcoa_coordinates.csv`：PCo1/PCo2 坐标、SampleID 与分组列。
-- `tables/beta_permanova.csv`：adonis2 的统计表。
-- `figures/beta_pcoa_bray.png/.pdf`：PCoA 散点图（按组着色）。
+- `beta/tables/beta_pcoa_coordinates.csv`：PCoA1/PCoA2 坐标、SampleID 与分组列。
+- `beta/tables/beta_permanova.csv`：adonis2 统计表及置换次数。
+- `beta/tables/beta_dispersion.csv`：PERMDISP 统计结果。
+- `beta/tables/beta_dispersion_distances.csv`：样本到组中心的距离。
+- `beta/figures/pcoa/`：纯样本点、95%置信椭圆、凸包、中心连线及组合视图的 PNG/PDF。
+- `beta/figures/dispersion/`：组内离散度诊断图。
 
 解释边界：
 - PERMANOVA 反映距离矩阵上的组间差异，不等价于具体驱动因素或因果关系。
@@ -175,10 +188,10 @@ KeyTaxaScore(t) = Σ_i [ w_i * s_i(t) ] / Σ_i [ w_i ]  ,  i ∈ {diff, ml, netw
 ## 7. AI 解释约束规则
 本系统将 AI 解释设计为“受统计结果约束的摘要生成”，包括本地规则解释与（可选）LLM 摘要两部分。
 
-### 7.1 本地规则解释（Phase 4A）
+### 7.1 本地规则解释
 输入：
 - `json/diff_summary.json` 与差异结果表；
-- （可用时）`tables/alpha_stats.csv`、`tables/beta_permanova.csv`。
+- （可用时）`alpha/tables/alpha_stats.csv`、`beta/tables/beta_permanova.csv`。
 
 规则：
 - `FDR < 0.05`：作为显著结果列表；
@@ -188,9 +201,9 @@ KeyTaxaScore(t) = Σ_i [ w_i * s_i(t) ] / Σ_i [ w_i ]  ,  i ∈ {diff, ml, netw
 输出：
 - `ai/diff_interpretation.md`、`ai/methods.md`、`ai/figure_legends.md`
 
-### 7.2 LLM 受约束摘要（Phase 4B，可选）
+### 7.2 大模型受约束摘要（可选）
 LLM 输入限制：
-- 只提供 `diff_summary.json` 与 Phase 4A 三份文本；
+- 只提供 `diff_summary.json` 与本地规则生成的三份文本；
 - 明确“不读原始 abundance 表”。
 
 LLM 约束要点（提示词规则）：
@@ -221,6 +234,5 @@ LLM 约束要点（提示词规则）：
 记录内容（示例）：
 - 输入文件：保存到 `input/`，同时记录原始文件名与 MD5。
 - 参数：记录 `group_var` 等关键参数。
-- 阶段信息：记录 Phase6/Phase7 等阶段的时间戳、阈值（如网络阈值）、权重（Key Taxa Score 融合权重）、可靠性提示等。
+- 阶段信息：记录网络分析、关键菌评分等阶段的时间戳、阈值、融合权重和可靠性提示。
 - 错误信息：失败时写入 `logs/error.log`（便于追踪与复现问题）。
-

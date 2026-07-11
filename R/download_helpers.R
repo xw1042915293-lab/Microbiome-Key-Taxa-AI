@@ -3,7 +3,7 @@
 
 safe_zip_job_results <- function(job_dir, job_id, include_dirs = NULL, zip_basename = NULL) {
   if (is.null(include_dirs)) {
-    include_dirs <- c("tables", "figures", "json", "ai", "report", "logs")
+    include_dirs <- c("alpha", "beta", "tables", "figures", "json", "ai", "report", "logs")
   }
   if (is.null(zip_basename)) {
     zip_basename <- paste0("microbiome_key_taxa_ai_", job_id, ".zip")

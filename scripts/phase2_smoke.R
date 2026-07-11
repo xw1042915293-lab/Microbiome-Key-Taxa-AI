@@ -21,10 +21,11 @@ res <- run_basic_analysis(
 )
 
 stopifnot(file.exists(file.path(job_dir, "objects", "microeco_dataset.rds")))
-stopifnot(file.exists(file.path(job_dir, "tables", "alpha_diversity.csv")))
-stopifnot(file.exists(file.path(job_dir, "figures", "alpha_shannon_boxplot.png")))
-stopifnot(file.exists(file.path(job_dir, "tables", "beta_pcoa_coordinates.csv")))
-stopifnot(file.exists(file.path(job_dir, "tables", "beta_permanova.csv")))
-stopifnot(file.exists(file.path(job_dir, "figures", "beta_pcoa_bray.png")))
+stopifnot(file.exists(file.path(job_dir, "alpha", "tables", "alpha_diversity.csv")))
+stopifnot(file.exists(file.path(job_dir, "alpha", "figures", "shannon", "shannon_boxplot.png")))
+stopifnot(file.exists(file.path(job_dir, "beta", "tables", "beta_pcoa_coordinates.csv")))
+stopifnot(file.exists(file.path(job_dir, "beta", "tables", "beta_permanova.csv")))
+stopifnot(file.exists(file.path(job_dir, "beta", "tables", "beta_dispersion.csv")))
+stopifnot(file.exists(file.path(job_dir, "beta", "figures", "pcoa", "pcoa_ellipse_centroid.png")))
 
 cat("phase2 ok\n")

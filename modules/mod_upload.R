@@ -36,6 +36,9 @@ mod_upload_server <- function(id, state) {
       job_id <- basename(job_dir)
       state$job_id <- job_id
       state$job_dir <- job_dir
+      state$input_data <- NULL
+      reset_workflow_results(state)
+      reset_workflow_steps(state)
       workflow_set_status(state, "job_created")
 
       # Persist inputs to job_dir/input/

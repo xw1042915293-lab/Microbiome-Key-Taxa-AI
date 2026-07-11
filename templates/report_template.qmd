@@ -133,7 +133,8 @@ machine learning screening, co-occurrence network analysis, and the final Key Ta
 ml_sum <- safe_read_json(ctx$paths$json$ml_summary %||% file.path(job_dir, "json", "ml_summary.json"))
 net_sum <- safe_read_json(ctx$paths$json$network_summary %||% file.path(job_dir, "json", "network_summary.json"))
 
-alpha_path <- ctx$paths$tables$alpha_diversity %||% file.path(job_dir, "tables", "alpha_diversity.csv")
+alpha_path <- ctx$paths$tables$alpha_diversity %||% file.path(job_dir, "alpha", "tables", "alpha_diversity.csv")
+if (!file.exists(alpha_path)) alpha_path <- file.path(job_dir, "tables", "alpha_diversity.csv")
 alpha <- safe_read_csv(alpha_path)
 
 sig_path <- ctx$paths$tables$differential_taxa_significant %||% file.path(job_dir, "tables", "differential_taxa_significant.csv")
@@ -197,7 +198,8 @@ if (!is.null(group_counts)) {
 check_path <- ctx$paths$tables$data_check_summary %||% file.path(job_dir, "tables", "data_check_summary.csv")
 checks <- safe_read_csv(check_path)
 ml_sum <- safe_read_json(ctx$paths$json$ml_summary %||% file.path(job_dir, "json", "ml_summary.json"))
-alpha_path <- ctx$paths$tables$alpha_diversity %||% file.path(job_dir, "tables", "alpha_diversity.csv")
+alpha_path <- ctx$paths$tables$alpha_diversity %||% file.path(job_dir, "alpha", "tables", "alpha_diversity.csv")
+if (!file.exists(alpha_path)) alpha_path <- file.path(job_dir, "tables", "alpha_diversity.csv")
 alpha <- safe_read_csv(alpha_path)
 
 repro_gv <- if (is.list(ctx$reproducibility) && is.list(ctx$reproducibility$parameters) && !is.null(ctx$reproducibility$parameters$group_var)) as.character(ctx$reproducibility$parameters$group_var) else NA_character_
@@ -274,37 +276,60 @@ This report includes pre-generated AI interpretation text when available. Phase 
 ## Alpha Diversity
 
 ```{r}
-alpha_path <- ctx$paths$tables$alpha_diversity %||% file.path(job_dir, "tables", "alpha_diversity.csv")
+alpha_path <- ctx$paths$tables$alpha_diversity %||% file.path(job_dir, "alpha", "tables", "alpha_diversity.csv")
+if (!file.exists(alpha_path)) alpha_path <- file.path(job_dir, "tables", "alpha_diversity.csv")
 alpha <- safe_read_csv(alpha_path)
 if (!is.null(alpha)) knitr::kable(alpha, caption = "Alpha diversity indices per sample")
 ```
 
 ```{r}
-alpha_stats_path <- ctx$paths$tables$alpha_stats %||% file.path(job_dir, "tables", "alpha_stats.csv")
+alpha_stats_path <- ctx$paths$tables$alpha_stats %||% file.path(job_dir, "alpha", "tables", "alpha_stats.csv")
+if (!file.exists(alpha_stats_path)) alpha_stats_path <- file.path(job_dir, "tables", "alpha_stats.csv")
 stats <- safe_read_csv(alpha_stats_path)
 if (!is.null(stats)) knitr::kable(stats, caption = "Alpha diversity group comparison")
 ```
 
 ```{r}
-#| fig-cap: "Figure 1. Shannon alpha diversity by group."
+#| fig-cap: "Figure 1. Core Alpha diversity indices by group."
 #| out-width: "100%"
-fig_alpha <- ctx$paths$figures$alpha_shannon_boxplot %||% file.path(job_dir, "figures", "alpha_shannon_boxplot.png")
+fig_alpha <- ctx$paths$figures$alpha_diversity_overview %||% file.path(job_dir, "alpha", "figures", "overview", "alpha_overview_violin_box.png")
+if (!file.exists(fig_alpha)) {
+  fig_alpha <- ctx$paths$figures$alpha_shannon_boxplot %||% file.path(job_dir, "alpha", "figures", "shannon", "shannon_boxplot.png")
+}
+if (!file.exists(fig_alpha)) {
+  fig_alpha <- file.path(job_dir, "figures", "alpha_shannon_boxplot.png")
+}
 safe_include_graphics(fig_alpha)
 ```
 
 ## Beta Diversity
 
 ```{r}
-beta_perm_path <- ctx$paths$tables$beta_permanova %||% file.path(job_dir, "tables", "beta_permanova.csv")
+beta_perm_path <- ctx$paths$tables$beta_permanova %||% file.path(job_dir, "beta", "tables", "beta_permanova.csv")
+if (!file.exists(beta_perm_path)) beta_perm_path <- file.path(job_dir, "tables", "beta_permanova.csv")
 perm <- safe_read_csv(beta_perm_path)
 if (!is.null(perm)) knitr::kable(perm, caption = "PERMANOVA results")
 ```
 
 ```{r}
-#| fig-cap: "Figure 2. Bray-Curtis PCoA ordination (beta diversity)."
+beta_disp_path <- ctx$paths$tables$beta_dispersion %||% file.path(job_dir, "beta", "tables", "beta_dispersion.csv")
+beta_disp <- safe_read_csv(beta_disp_path)
+if (!is.null(beta_disp)) knitr::kable(beta_disp, caption = "PERMDISP multivariate dispersion test")
+```
+
+```{r}
+#| fig-cap: "Figure 2. Bray-Curtis PCoA with 95% confidence regions and group centroids. PERMANOVA and PERMDISP statistics are shown in the plot caption."
 #| out-width: "100%"
-fig_beta <- ctx$paths$figures$beta_pcoa_bray %||% file.path(job_dir, "figures", "beta_pcoa_bray.png")
+fig_beta <- ctx$paths$figures$beta_pcoa_bray %||% file.path(job_dir, "beta", "figures", "pcoa", "pcoa_ellipse_centroid.png")
+if (!file.exists(fig_beta)) fig_beta <- file.path(job_dir, "figures", "beta_pcoa_bray.png")
 safe_include_graphics(fig_beta)
+```
+
+```{r}
+#| fig-cap: "Figure 3. Distances to group medians used for the PERMDISP diagnostic."
+#| out-width: "100%"
+fig_beta_disp <- ctx$paths$figures$beta_dispersion %||% file.path(job_dir, "beta", "figures", "dispersion", "beta_dispersion.png")
+safe_include_graphics(fig_beta_disp)
 ```
 
 ## Differential Abundance Analysis
@@ -319,23 +344,33 @@ if (!is.null(diff)) {
   sig <- safe_read_csv(sig_path)
   if (!is.null(sig) && nrow(sig) > 0) {
     if (!"display_taxon" %in% names(sig) && "taxon" %in% names(sig)) sig$display_taxon <- display_taxon(sig$taxon)
-    show_cols <- intersect(c("display_taxon", "tax_level", "fdr", "log2fc", "mean_abundance", "prevalence", "taxon"), names(sig))
+    show_cols <- intersect(c("display_taxon", "tax_level", "p_value", "fdr", "log2fc", "effect_size", "effect_size_metric", "effect_magnitude", "mean_abundance", "prevalence"), names(sig))
     knitr::kable(sig[, show_cols, drop = FALSE], caption = paste("Significant taxa (n =", nrow(sig), ")"))
   } else {
-    show_cols <- intersect(c("display_taxon", "tax_level", "fdr", "log2fc", "mean_abundance", "prevalence", "taxon"), names(diff))
+    show_cols <- intersect(c("display_taxon", "tax_level", "tested", "p_value", "fdr", "log2fc", "effect_size", "effect_size_metric", "effect_magnitude", "mean_abundance", "prevalence", "exclusion_reason"), names(diff))
     knitr::kable(utils::head(diff[, show_cols, drop = FALSE], 30), caption = "Differential taxa (first 30 rows; display_taxon shown)")
   }
 }
 ```
 
 ```{r}
-#| fig-cap: "Figure 3. Differential abundance summary (barplot)."
+#| fig-cap: "Figure 4. Differential abundance effect plot. Two-group analyses use the signed effect plot; multi-group analyses use a group-balanced effect plot so each enriched group remains represented. Enriched groups use significant post-hoc evidence when available, otherwise the uniquely highest group median."
 #| out-width: "100%"
-fig_diff <- ctx$paths$figures$diff_taxa_barplot %||% file.path(job_dir, "figures", "diff_taxa_barplot.png")
+fig_directional <- ctx$paths$figures$diff_taxa_directional %||% file.path(job_dir, "figures", "diff_taxa_directional.png")
+fig_balanced <- ctx$paths$figures$diff_taxa_balanced %||% file.path(job_dir, "figures", "diff_taxa_balanced.png")
+fig_lollipop <- ctx$paths$figures$diff_taxa_barplot %||% file.path(job_dir, "figures", "diff_taxa_barplot.png")
+is_two_group <- !is.null(diff) && is.data.frame(diff) && "n_groups" %in% names(diff) && any(diff$n_groups == 2, na.rm = TRUE)
+fig_diff <- if (is_two_group && file.exists(fig_directional)) {
+  fig_directional
+} else if (!is_two_group && file.exists(fig_balanced)) {
+  fig_balanced
+} else {
+  fig_lollipop
+}
 safe_include_graphics(fig_diff)
 ```
 
-## AI-Constrained Interpretation
+## AI 约束解释
 
 ```{r results='asis'}
 # Include pre-generated AI markdown only (no API calls in Phase 8).
@@ -353,13 +388,16 @@ if (file.exists(ai_md)) {
 
 ## Machine Learning Biomarker Screening
 
+Machine-learning performance below is based on repeated, stratified out-of-fold predictions. It is not training-set performance or independent external validation. Feature filtering, transformation, imputation, and tuning were fitted within each outer training split. Differential abundance testing of top taxa used the same dataset and is supportive rather than independent validation.
+
 ```{r}
-ml_imp_path <- ctx$paths$tables$ml_feature_importance %||% file.path(job_dir, "tables", "ml_feature_importance.csv")
+ml_imp_path <- ctx$paths$tables$ml_feature_importance_stability %||% file.path(job_dir, "tables", "ml_feature_importance_stability.csv")
+if (!file.exists(ml_imp_path)) ml_imp_path <- ctx$paths$tables$ml_feature_importance %||% file.path(job_dir, "tables", "ml_feature_importance.csv")
 ml_imp <- safe_read_csv(ml_imp_path)
 if (!is.null(ml_imp) && is.data.frame(ml_imp) && nrow(ml_imp) > 0) {
-  ml_imp$display_taxon <- display_taxon(ml_imp$feature %||% ml_imp$taxon)
-  show_cols <- intersect(c("display_taxon", "importance"), names(ml_imp))
-  knitr::kable(utils::head(ml_imp[, show_cols, drop = FALSE], 20), caption = "ML feature importance (Top 20; display_taxon shown)")
+  if (!"display_label" %in% names(ml_imp)) ml_imp$display_label <- display_taxon(ml_imp$feature %||% ml_imp$taxon)
+  show_cols <- intersect(c("display_label", "mean_importance", "ci_lower", "ci_upper", "top10_frequency", "stability_category"), names(ml_imp))
+  knitr::kable(utils::head(ml_imp[, show_cols, drop = FALSE], 15), digits = 4, caption = "Fold-wise permutation importance stability (Top 15)")
 }
 ```
 
@@ -367,18 +405,44 @@ if (!is.null(ml_imp) && is.data.frame(ml_imp) && nrow(ml_imp) > 0) {
 ml_metrics_path <- ctx$paths$tables$ml_model_metrics %||% file.path(job_dir, "tables", "ml_model_metrics.csv")
 ml_metrics <- safe_read_csv(ml_metrics_path)
 if (!is.null(ml_metrics)) knitr::kable(ml_metrics, caption = "ML model metrics")
+
+ml_perm <- safe_read_csv(ctx$paths$tables$ml_permutation_test %||% file.path(job_dir, "tables", "ml_permutation_test.csv"))
+if (!is.null(ml_perm)) knitr::kable(ml_perm, digits = 4, caption = "Label permutation test")
+
+ml_top_stats <- safe_read_csv(ctx$paths$tables$ml_top_taxa_abundance_statistics %||% file.path(job_dir, "tables", "ml_top_taxa_abundance_statistics.csv"))
+if (!is.null(ml_top_stats)) {
+  show_cols <- intersect(c("display_label", "method", "p_value", "fdr_bh", "effect_size", "effect_size_name"), names(ml_top_stats))
+  knitr::kable(ml_top_stats[, show_cols, drop = FALSE], digits = 4, caption = "Supportive abundance statistics for top taxa (same dataset)")
+}
 ```
 
 ```{r}
-#| fig-cap: "Figure 4. Random Forest feature importance (Top 20; display_taxon shown)."
+#| fig-cap: "Figure 5. Cross-validated ROC, consensus confusion matrix, stable permutation importance, and supportive abundance distributions."
 #| out-width: "100%"
-safe_include_graphics(ctx$paths$figures$ml_importance %||% file.path(job_dir, "figures", "ml_importance.png"))
+ml_combined_path <- ctx$paths$figures$ml_combined %||% file.path(job_dir, "figures", "ml_figure_combined.png")
+if (!file.exists(ml_combined_path)) ml_combined_path <- ctx$paths$figures$ml_importance %||% file.path(job_dir, "figures", "ml_importance.png")
+safe_include_graphics(ml_combined_path)
 ```
 
 ```{r}
-#| fig-cap: "Figure 5. Random Forest confusion matrix."
-#| out-width: "75%"
-safe_include_graphics(ctx$paths$figures$ml_confusion_matrix %||% file.path(job_dir, "figures", "ml_confusion_matrix.png"))
+#| fig-cap: "Figure 6. Distribution of performance across repeated cross-validation runs."
+#| out-width: "70%"
+ml_performance_path <- ctx$paths$figures$ml_performance_distribution %||% file.path(job_dir, "figures", "ml_figure_performance_distribution.png")
+if (!file.exists(ml_performance_path)) ml_performance_path <- ctx$paths$figures$ml_confusion_matrix %||% file.path(job_dir, "figures", "ml_confusion_matrix.png")
+safe_include_graphics(ml_performance_path)
+```
+
+```{r}
+ml_methods_path <- file.path(job_dir, "ml_methods.txt")
+ml_results_path <- file.path(job_dir, "ml_results_summary.txt")
+if (file.exists(ml_methods_path)) {
+  cat("\n\n### Machine-learning methods\n\n")
+  cat(paste(readLines(ml_methods_path, warn = FALSE, encoding = "UTF-8")[-1], collapse = "\n"))
+}
+if (file.exists(ml_results_path)) {
+  cat("\n\n### Machine-learning result statement\n\n")
+  cat(paste(readLines(ml_results_path, warn = FALSE, encoding = "UTF-8")[-1], collapse = "\n"))
+}
 ```
 
 ## Co-occurrence Network Analysis
@@ -405,7 +469,7 @@ if (!is.null(net_edges) && is.data.frame(net_edges) && nrow(net_edges) > 0) {
 ```
 
 ```{r}
-#| fig-cap: "Figure 6. Co-occurrence network (Spearman correlation; co-occurrence does not imply direct interaction)."
+#| fig-cap: "Figure 7. Co-occurrence network (Spearman correlation; co-occurrence does not imply direct interaction)."
 #| out-width: "100%"
 safe_include_graphics(ctx$paths$figures$network_plot %||% file.path(job_dir, "figures", "network_plot.png"))
 ```
@@ -449,7 +513,7 @@ if (!is.null(kt) && is.data.frame(kt) && nrow(kt) > 0) {
 ```
 
 ```{r}
-#| fig-cap: "Figure 7. Key Taxa Score barplot (Top ranked candidates)."
+#| fig-cap: "Figure 8. Key Taxa Score barplot (Top ranked candidates)."
 #| out-width: "100%"
 safe_include_graphics(ctx$paths$figures$key_taxa_score_barplot %||% file.path(job_dir, "figures", "key_taxa_score_barplot.png"))
 ```
@@ -513,15 +577,21 @@ cat("**microeco version:**", tryCatch(as.character(utils::packageVersion("microe
 
 cat("**Generated outputs (expected):**\n\n")
 expected <- c(
-  "tables/alpha_diversity.csv",
-  "tables/beta_permanova.csv",
+  "alpha/tables/alpha_diversity.csv",
+  "beta/tables/beta_permanova.csv",
+  "beta/tables/beta_dispersion.csv",
   "tables/differential_taxa.csv",
   "tables/ml_feature_importance.csv",
   "tables/network_nodes.csv",
   "tables/key_taxa_score.csv",
-  "figures/alpha_shannon_boxplot.png",
-  "figures/beta_pcoa_bray.png",
+  "alpha/figures/overview/alpha_overview_violin_box.png",
+  "alpha/figures/shannon/shannon_boxplot.png",
+  "beta/figures/pcoa/pcoa_ellipse_centroid.png",
+  "beta/figures/dispersion/beta_dispersion.png",
   "figures/diff_taxa_barplot.png",
+  "figures/diff_taxa_directional.png",
+  "figures/diff_taxa_balanced.png",
+  "figures/diff_taxa_heatmap.png",
   "figures/ml_importance.png",
   "figures/network_plot.png",
   "figures/key_taxa_score_barplot.png",
@@ -542,8 +612,12 @@ cat("**AI interpretation rule summary:** Phase 8 does not call any LLM API; it o
 ```{r}
 supp <- list(
   alpha_diversity = alpha_path,
-  beta_pcoa_coordinates = ctx$paths$tables$beta_pcoa_coordinates %||% file.path(job_dir, "tables", "beta_pcoa_coordinates.csv"),
+  beta_pcoa_coordinates = ctx$paths$tables$beta_pcoa_coordinates %||% file.path(job_dir, "beta", "tables", "beta_pcoa_coordinates.csv"),
+  beta_dispersion = ctx$paths$tables$beta_dispersion %||% file.path(job_dir, "beta", "tables", "beta_dispersion.csv"),
+  beta_dispersion_distances = ctx$paths$tables$beta_dispersion_distances %||% file.path(job_dir, "beta", "tables", "beta_dispersion_distances.csv"),
   differential_taxa = diff_path,
+  differential_taxa_group_summary = ctx$paths$tables$differential_taxa_group_summary %||% file.path(job_dir, "tables", "differential_taxa_group_summary.csv"),
+  differential_taxa_pairwise = ctx$paths$tables$differential_taxa_pairwise %||% file.path(job_dir, "tables", "differential_taxa_pairwise.csv"),
   ml_feature_importance = ml_imp_path,
   network_nodes = net_nodes_path,
   network_edges = net_edges_path,

@@ -1,7 +1,10 @@
-# CASE STUDY（案例研究：示例数据全流程说明）
+# 微生物组关键菌筛选与可信解释系统 V1.0
 
-面向对象：硕士毕业论文支撑材料 / 系统验收材料  
-范围声明：本案例基于仓库自带示例数据与既有系统功能进行说明，不引入新方法、不修改任何 R 代码。  
+## 示例数据案例说明
+
+面向对象：软件著作权说明书、毕业答辩和系统验收材料
+
+范围声明：本案例基于仓库自带示例数据与现有系统功能进行说明。正式材料中的截图和实际结果应在 V1.0 冻结后重新生成。
 重要提示：本案例全部结果仅用于演示与探索性说明，不可直接作为真实科研结论或因果/机制证据。
 
 ## 1. 示例数据简介
@@ -32,44 +35,45 @@
 系统推荐的最小闭环流程如下（详尽操作步骤可参考 `docs/USER_GUIDE.md` 与 `docs/DEMO_CASE.md`）：
 
 1. 启动 Shiny 应用（RStudio 中运行 `shiny::runApp()`）。
-2. 在 `Upload Data` 页面上传三张表，并点击创建 job（系统会在 `results/` 下生成独立 job 目录并固化输入）。
-3. 在 `Data Check` 页面执行校验，确认整体状态为可继续（pass 或可解释的 warning）。
-4. 在 `Parameters` 页面选择分组变量 `group_var = Group` 并保存（写入可复现记录）。
-5. 在 `Run Analysis` 页面执行 `Run Full Workflow (Phase 2-8)`（生成表格、图形、JSON、AI 文本与报告）。
-6. 在 `Report` 页面渲染并打开 `report.html`（作为验收交付与论文附件的主要汇总材料）。
+2. 在“快速开始”或“上传数据”页面导入三张表，创建任务并固化输入。
+3. 执行数据质量检查，确认整体状态为通过或可接受的警告。
+4. 选择分组变量 `group_var = Group` 并保存参数。
+5. 运行完整分析流程，生成表格、图形、JSON、解释文本与报告。
+6. 在“结果总览”核对结果，在“报告中心”生成并打开报告。
 
-本仓库的既有验收记录中，存在一份已通过的示例 job，可用于核对目录结构与产物齐全性：
-
-- `results/job_20260522_125641_fflx2v/`
-
-注意：用户每次运行都会生成新的 job 目录，上述路径仅作为“通过样例”的参考。
+正式申报前应使用冻结后的 V1.0 新建一份验收任务，并将其任务编号、截图和产物清单补充到本案例。历史任务只用于理解目录结构，不作为正式验收依据。
 
 ## 3. Alpha diversity 结果说明
 
 ### 3.1 主要产物
 
-- Alpha 指标表：`tables/alpha_diversity.csv`
-- 统计检验结果：`tables/alpha_stats.csv`
-- 关键图形（Shannon）：`figures/alpha_shannon_boxplot.png`（及可选 `.pdf`）
+- Alpha 指标表：`alpha/tables/alpha_diversity.csv`
+- 统计检验结果：`alpha/tables/alpha_stats.csv`
+- 多指标概览：`alpha/figures/overview/`
+- 单指标图形：`alpha/figures/observed/`、`chao1/`、`shannon/`、`simpson/`
+- 每个图形目录提供箱线、小提琴、雨云式、散点与区间估计等七类 PNG/PDF 图形。
 
 ### 3.2 解读口径（论文可用表述）
 
-- Shannon 指数用于描述样本内多样性水平；数值越大通常表示多样性越高，但其生物学意义需结合实验背景讨论。
-- 组间差异的统计检验结果以 `alpha_stats.csv` 为准；在论文中建议同时报告检验方法与校正后的显著性指标（如 FDR）。
+- Observed 和 Chao1用于描述观测及估计丰富度，Shannon 和 Simpson 用于描述兼顾相对丰度结构的多样性。
+- 四项指标的组间总体检验结果以 `alpha_stats.csv` 为准；在论文中应同时报告检验方法、原始 p 值和 FDR。
 - 本示例样本量很小（每组 3 个样本），即使出现差异，也应仅作为探索性观察，不应夸大结论强度。
 
 ## 4. Beta diversity 结果说明
 
 ### 4.1 主要产物
 
-- PCoA 坐标：`tables/beta_pcoa_coordinates.csv`
-- PERMANOVA 结果：`tables/beta_permanova.csv`
-- 关键图形（Bray-Curtis PCoA）：`figures/beta_pcoa_bray.png`（及可选 `.pdf`）
+- PCoA 坐标：`beta/tables/beta_pcoa_coordinates.csv`
+- PERMANOVA 结果：`beta/tables/beta_permanova.csv`
+- PERMDISP 及离散度距离：`beta/tables/beta_dispersion*.csv`
+- 论文级 PCoA：`beta/figures/pcoa/`
+- 组内离散度诊断：`beta/figures/dispersion/`
 
 ### 4.2 解读口径（论文可用表述）
 
 - PCoA 图用于展示样本间距离结构在低维空间的近似；点间距离反映 Bray-Curtis 距离意义下的相似性差异。
 - PERMANOVA 检验用于评估“距离矩阵层面”的组间差异是否显著；其结果不等同于机制解释。
+- PERMDISP 用于判断组内离散度是否一致；当 PERMDISP 显著时，PERMANOVA 的组间结论需要特别谨慎。
 - 当样本量较小或组内离散度差异较大时，PCoA 分离与检验结论都需谨慎解释，可在讨论部分明确其探索性性质。
 
 ## 5. 差异菌结果说明
@@ -160,11 +164,10 @@
 
 ## 11. 案例结论
 
-在示例数据上，系统能够完成从输入固化、数据校验、参数记录到多模块分析与 HTML 报告汇总的完整闭环，并产出可被核对的表格、图形与结构化汇总文件，为毕业论文的“系统实现与验收”部分提供支撑材料。所有分析结果仅用于演示与探索性说明，论文表述应避免将其上升为因果或机制结论。
+历史运行产物表明，系统能够形成从输入固化、数据校验和参数记录到多模块分析与报告汇总的完整产物结构。V1.0 的正式闭环结论应以冻结版本重新验收的结果为准。所有示例结果仅用于演示与探索性说明，不得表述为因果或机制结论。
 
 ## 12. 注意：所有结果均为示例和探索性结果
 
 - 示例数据仅用于验证系统流程与产物结构，不代表真实研究结论。
 - 机器学习、网络与 Key Taxa Score 等模块均为探索性分析工具，不能替代独立验证与严格实验设计。
 - AI 解释为“受约束摘要”，不得用于夸大统计结果或输出因果/机制推断。
-

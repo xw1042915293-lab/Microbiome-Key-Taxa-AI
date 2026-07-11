@@ -1,0 +1,179 @@
+# Differential abundance results: publication-oriented figures and tables.
+
+mod_diff_ui <- function(id) {
+  ns <- shiny::NS(id)
+  shiny::fluidPage(
+    shiny::h3("差异丰度"),
+    shiny::p("按所选分类层级聚合后进行非参数检验，并报告 BH-FDR、效应量和组内描述统计。"),
+    shiny::uiOutput(ns("diff_notice")),
+    bslib::card(
+      class = "kkai-card",
+      bslib::card_header("差异丰度主图"),
+      shiny::fluidRow(
+        shiny::column(3, shiny::selectInput(
+          ns("plot_type"), "图形类型",
+          choices = c(
+            "Effect-size lollipop" = "lollipop",
+            "Abundance heatmap（后续扩展）" = "heatmap",
+            "Taxon boxplot（后续扩展）" = "boxplot"
+          ), selected = "lollipop"
+        )),
+        shiny::column(2, shiny::selectInput(ns("top_n"), "Top N", choices = c(10, 15, 20), selected = 15)),
+        shiny::column(3, shiny::radioButtons(
+          ns("sort_by"), "排序方式",
+          choices = c("Effect size" = "effect_size", "BH-FDR" = "fdr"),
+          selected = "effect_size", inline = TRUE
+        )),
+        shiny::column(2, shiny::checkboxInput(ns("show_unclassified"), "显示完全未分类 taxa", value = FALSE)),
+        shiny::column(2, shiny::checkboxInput(ns("show_fdr_labels"), "显示 FDR 标签", value = FALSE))
+      ),
+      shiny::uiOutput(ns("main_plot_ui")),
+      shiny::div(
+        class = "kkai-download-row",
+        shiny::downloadButton(ns("download_figure_png"), "主图 PNG (300 dpi)", class = "btn btn-outline-secondary btn-sm"),
+        shiny::downloadButton(ns("download_figure_pdf"), "主图 PDF", class = "btn btn-outline-secondary btn-sm")
+      )
+    ),
+    shiny::tags$div(style = "margin-top: 1rem;"),
+    shiny::div(
+      class = "kkai-download-row",
+      shiny::downloadButton(ns("download_all"), "完整结果 CSV", class = "btn btn-outline-primary btn-sm"),
+      shiny::downloadButton(ns("download_sig"), "显著结果 CSV", class = "btn btn-outline-primary btn-sm"),
+      shiny::downloadButton(ns("download_group"), "组内统计 CSV", class = "btn btn-outline-primary btn-sm"),
+      shiny::downloadButton(ns("download_pairwise"), "事后比较 CSV", class = "btn btn-outline-primary btn-sm")
+    ),
+    shiny::tags$div(style = "margin-top: 1rem;"),
+    bslib::card(
+      class = "kkai-card",
+      bslib::card_header("差异分析完整结果"),
+      shiny::tags$p(class = "kkai-muted", "下表保留全部聚合后的分类单元，支持检索、排序和分页。"),
+      DT::DTOutput(ns("diff_table"))
+    )
+  )
+}
+
+mod_diff_server <- function(id, state) {
+  shiny::moduleServer(id, function(input, output, session) {
+    table_path <- function(name) {
+      if (is.null(state$job_dir)) return(NULL)
+      file.path(state$job_dir, "tables", name)
+    }
+
+    read_table <- function(name) {
+      path <- table_path(name)
+      if (is.null(path) || !file.exists(path)) return(NULL)
+      tryCatch(readr::read_csv(path, show_col_types = FALSE, progress = FALSE), error = function(e) NULL)
+    }
+
+    diff_table_data <- shiny::reactive(read_table("differential_taxa.csv"))
+
+    plot_data <- shiny::reactive({
+      df <- diff_table_data()
+      if (is.null(df)) return(data.frame())
+      prepare_diff_lollipop_data(
+        df,
+        top_n = as.integer(input$top_n %||% 15L),
+        show_unclassified = isTRUE(input$show_unclassified),
+        sort_by = input$sort_by %||% "effect_size"
+      )
+    })
+
+    current_plot <- shiny::reactive({
+      build_diff_lollipop_plot(
+        plot_data(),
+        show_fdr_labels = isTRUE(input$show_fdr_labels),
+        sort_by = input$sort_by %||% "effect_size"
+      )
+    })
+
+    plot_height_inches <- shiny::reactive(max(5.5, min(9, 2.5 + 0.34 * nrow(plot_data()))))
+
+    output$diff_notice <- shiny::renderUI({
+      df <- diff_table_data()
+      if (is.null(df) || !is.data.frame(df) || nrow(df) < 1) {
+        return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "当前任务尚无差异丰度结果。"))
+      }
+      fdr <- if ("fdr" %in% names(df)) suppressWarnings(as.numeric(df$fdr)) else rep(NA_real_, nrow(df))
+      n_sig <- sum(is.finite(fdr) & fdr < 0.05)
+      if (n_sig == 0) {
+        shiny::tags$div(class = "kkai-alert kkai-alert--warning", "未检测到 FDR < 0.05 的显著差异菌。请查看完整结果表确认筛选与检验状态。")
+      } else {
+        shiny::tags$div(class = "kkai-alert kkai-alert--success", paste0("检测到 ", n_sig, " 个 FDR < 0.05 的显著差异菌。"))
+      }
+    })
+
+    output$main_plot_ui <- shiny::renderUI({
+      plot_type <- input$plot_type %||% "lollipop"
+      if (!identical(plot_type, "lollipop")) {
+        label <- if (identical(plot_type, "heatmap")) "Abundance heatmap" else "Taxon boxplot"
+        return(shiny::tags$div(
+          class = "kkai-alert kkai-alert--info",
+          paste0(label, " 当前尚未接入此模块；该入口仅用于后续扩展，不会生成假数据。")
+        ))
+      }
+      height_px <- max(440, min(760, 210 + 31 * max(1, nrow(plot_data()))))
+      shiny::plotOutput(session$ns("lollipop_plot"), height = paste0(height_px, "px"))
+    })
+
+    output$lollipop_plot <- shiny::renderPlot({
+      current_plot()
+    }, res = 110, bg = "white")
+
+    make_download <- function(output_id, source_name, download_name) {
+      output[[output_id]] <- shiny::downloadHandler(
+        filename = function() download_name,
+        content = function(file) {
+          src <- table_path(source_name)
+          shiny::req(src, file.exists(src))
+          file.copy(src, file, overwrite = TRUE)
+        }
+      )
+    }
+    make_download("download_all", "differential_taxa.csv", "differential_taxa_all.csv")
+    make_download("download_sig", "differential_taxa_significant.csv", "differential_taxa_significant.csv")
+    make_download("download_group", "differential_taxa_group_summary.csv", "differential_taxa_group_summary.csv")
+    make_download("download_pairwise", "differential_taxa_pairwise.csv", "differential_taxa_pairwise.csv")
+
+    output$download_figure_png <- shiny::downloadHandler(
+      filename = function() paste0("differential_taxa_top", input$top_n %||% 15, ".png"),
+      content = function(file) {
+        ggplot2::ggsave(file, plot = current_plot(), device = "png", width = 9,
+                        height = plot_height_inches(), units = "in", dpi = 300, bg = "white")
+      }
+    )
+    output$download_figure_pdf <- shiny::downloadHandler(
+      filename = function() paste0("differential_taxa_top", input$top_n %||% 15, ".pdf"),
+      content = function(file) {
+        ggplot2::ggsave(file, plot = current_plot(), device = "pdf", width = 9,
+                        height = plot_height_inches(), units = "in", bg = "white")
+      }
+    )
+
+    output$diff_table <- DT::renderDT({
+      df <- diff_table_data()
+      if (is.null(df) || !is.data.frame(df) || nrow(df) < 1) {
+        return(DT::datatable(data.frame(提示 = "未找到可展示的差异丰度结果。"), rownames = FALSE, options = list(dom = "t")))
+      }
+      show_cols <- intersect(c(
+        "display_taxon", "taxon_label", "tax_level", "tested", "prevalence", "mean_abundance", "p_value", "fdr",
+        "log2fc", "effect_size", "effect_size_metric", "enriched_group", "enriched_group_method",
+        "effect_magnitude", "direction", "significance", "exclusion_reason"
+      ), names(df))
+      df_show <- df[, show_cols, drop = FALSE]
+      labels <- c(
+        display_taxon = "显示名称", taxon_label = "原分类名称", tax_level = "分类层级", tested = "已检验",
+        prevalence = "总流行率", mean_abundance = "平均相对丰度", p_value = "P 值", fdr = "BH-FDR",
+        log2fc = "log2FC", effect_size = "效应量", effect_size_metric = "效应量指标",
+        enriched_group = "富集组", enriched_group_method = "富集组判定", effect_magnitude = "效应等级",
+        direction = "方向", significance = "显著性", exclusion_reason = "过滤原因"
+      )
+      names(df_show) <- unname(labels[show_cols])
+      dt <- DT::datatable(df_show, rownames = FALSE, filter = "top", extensions = "Buttons",
+                          options = list(pageLength = 20, scrollX = TRUE, searchHighlight = TRUE,
+                                         dom = "Bfrtip", buttons = c("copy", "csv")))
+      numeric_cols <- intersect(c("总流行率", "平均相对丰度", "P 值", "BH-FDR", "log2FC", "效应量"), names(df_show))
+      if (length(numeric_cols)) dt <- DT::formatSignif(dt, numeric_cols, digits = 4)
+      dt
+    })
+  })
+}

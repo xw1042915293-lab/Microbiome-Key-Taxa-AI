@@ -1,4 +1,4 @@
-# 快速开始仪表盘：上传、检查、运行与下载一体化。
+# Quick Start dashboard: upload, check, configure, run, and download in one page.
 
 mod_quick_start_ui <- function(id) {
   ns <- shiny::NS(id)
@@ -10,7 +10,7 @@ mod_quick_start_ui <- function(id) {
         class = "hero-card kkai-qs-hero",
         shiny::tags$div(
           shiny::tags$h2("快速开始"),
-          shiny::tags$p("在一个仪表盘里完成上传、检查、参数设置、运行和下载。")
+          shiny::tags$p("在一个页面中完成上传、检查、参数设置、运行和下载。")
         ),
         shiny::tags$div(
           class = "kkai-qs-hero-kv",
@@ -45,7 +45,8 @@ mod_quick_start_ui <- function(id) {
       bslib::card(
         class = "dashboard-card kkai-upload-actions",
         bslib::card_header("保存上传文件"),
-        shiny::tags$div(class = "kkai-quick-actions",
+        shiny::tags$div(
+          class = "kkai-quick-actions",
           shiny::actionButton(ns("create_job"), "保存到任务目录", class = "btn btn-primary primary-button"),
           shiny::tags$span(class = "kkai-muted", "需要同时选择 3 个文件后再保存。")
         ),
@@ -67,7 +68,7 @@ mod_quick_start_ui <- function(id) {
           bslib::card_header("参数设置"),
           shiny::tags$div(class = "kkai-control", shiny::uiOutput(ns("group_var_ui"))),
           shiny::tags$div(class = "kkai-control", shiny::selectInput(ns("tax_level"), "分类层级", choices = c("Genus", "Family", "Order", "Class", "Phylum", "Kingdom"), selected = "Genus")),
-          shiny::tags$div(class = "kkai-control", shiny::selectInput(ns("beta_distance"), "Beta 距离", choices = c("bray", "jaccard", "ayc"), selected = "bray")),
+          shiny::tags$div(class = "kkai-control", shiny::selectInput(ns("beta_distance"), "Beta 距离", choices = c("bray", "jaccard"), selected = "bray")),
           shiny::uiOutput(ns("param_summary"))
         )
       ),
@@ -78,7 +79,7 @@ mod_quick_start_ui <- function(id) {
         bslib::card(
           class = "dashboard-card",
           bslib::card_header("运行完整分析"),
-          shiny::tags$div(class = "kkai-quick-actions", shiny::actionButton(ns("run_full"), "运行完整分析", class = "btn btn-primary primary-button")),
+          shiny::uiOutput(ns("run_full_btn")),
           shiny::uiOutput(ns("workflow_status")),
           shiny::uiOutput(ns("step_list"))
         ),
@@ -98,52 +99,13 @@ mod_quick_start_server <- function(id, state) {
     added_resources <- new.env(parent = emptyenv())
     user_message <- shiny::reactiveVal("")
     check_result_rv <- shiny::reactiveVal(NULL)
-    run_steps <- shiny::reactiveVal(NULL)
-    run_done <- shiny::reactiveVal(FALSE)
     run_error <- shiny::reactiveVal(NULL)
     zip_status <- shiny::reactiveVal("")
-    upload_saved <- shiny::reactiveVal(FALSE)
-
-    steps_spec <- data.frame(
-      step_id = c("data_prep", "alpha", "beta", "diff", "ai", "ml", "network", "key_taxa", "report"),
-      step = c(
-        "Data preparation",
-        "Alpha diversity",
-        "Beta diversity",
-        "Differential abundance",
-        "AI interpretation",
-        "Machine learning",
-        "Network analysis",
-        "Key Taxa Score",
-        "Report generation"
-      ),
-      stringsAsFactors = FALSE
-    )
-
-    init_steps <- function() {
-      data.frame(
-        step_id = steps_spec$step_id,
-        step = steps_spec$step,
-        status = rep("pending", nrow(steps_spec)),
-        detail = rep("", nrow(steps_spec)),
-        stringsAsFactors = FALSE
-      )
-    }
+    prog_val <- shiny::reactiveVal(NULL)
+    steps_spec <- workflow_steps_spec()
 
     set_message <- function(msg = "") {
       user_message(msg %||% "")
-    }
-
-    set_step_status <- function(step_id, status, detail = NULL) {
-      df <- run_steps()
-      if (!is.data.frame(df) || nrow(df) == 0) return(invisible(NULL))
-      i <- which(df$step_id == step_id)
-      if (length(i) == 1) {
-        df$status[i] <- tolower(status %||% "pending")
-        if (!is.null(detail)) df$detail[i] <- detail %||% ""
-        run_steps(df)
-      }
-      invisible(TRUE)
     }
 
     ensure_report_resource <- function(job_id, job_dir) {
@@ -160,8 +122,33 @@ mod_quick_start_server <- function(id, state) {
 
     current_report_path <- shiny::reactive({
       if (is.null(state$job_dir)) return(NULL)
+      # Depend on state$report_paths to trigger a reactive update
+      tmp <- state$report_paths
       file.path(state$job_dir, "report", "report.html")
     })
+
+    step_status <- function(step_id) {
+      (state$step_status %||% workflow_default_step_status())[[step_id]] %||% "waiting"
+    }
+
+    step_message <- function(step_id) {
+      (state$step_message %||% workflow_default_step_message())[[step_id]] %||% ""
+    }
+
+    status_badge_kind <- function(status) {
+      switch(
+        status,
+        done = "success",
+        running = "warning",
+        warning = "warning",
+        failed = "error",
+        skipped = "warning",
+        waiting = "warning",
+        idle = "warning",
+        ready = "warning",
+        "warning"
+      )
+    }
 
     output$message_box <- shiny::renderUI({
       msg <- user_message()
@@ -181,19 +168,6 @@ mod_quick_start_server <- function(id, state) {
       state$status %||% "idle"
     })
 
-    output$upload_status <- shiny::renderUI({
-      if (is.null(state$input_paths)) {
-        return(ui_status_badge("尚未上传文件", kind = "warning"))
-      }
-      shiny::tags$div(
-        class = "kkai-stack",
-        shiny::tags$div(class = "kkai-kv", shiny::tags$div(shiny::tags$b("Abundance:"), " ", shiny::tags$code(basename(state$input_paths$abundance_path %||% "")))),
-        shiny::tags$div(class = "kkai-kv", shiny::tags$div(shiny::tags$b("Metadata:"), " ", shiny::tags$code(basename(state$input_paths$metadata_path %||% "")))),
-        shiny::tags$div(class = "kkai-kv", shiny::tags$div(shiny::tags$b("Taxonomy:"), " ", shiny::tags$code(basename(state$input_paths$taxonomy_path %||% "")))),
-        ui_status_badge("已保存到任务输入目录", kind = "success")
-      )
-    })
-
     .picked_badge <- function(file_input) {
       if (is.null(file_input) || is.null(file_input$name) || !nzchar(file_input$name)) {
         return(ui_status_badge("未选择文件", kind = "warning"))
@@ -208,6 +182,19 @@ mod_quick_start_server <- function(id, state) {
     output$upload_abundance_badge <- shiny::renderUI({ .picked_badge(input$abundance) })
     output$upload_metadata_badge <- shiny::renderUI({ .picked_badge(input$metadata) })
     output$upload_taxonomy_badge <- shiny::renderUI({ .picked_badge(input$taxonomy) })
+
+    output$upload_status <- shiny::renderUI({
+      if (is.null(state$input_paths)) {
+        return(ui_status_badge("尚未上传文件", kind = "warning"))
+      }
+      shiny::tags$div(
+        class = "kkai-stack",
+        shiny::tags$div(class = "kkai-kv", shiny::tags$div(shiny::tags$b("Abundance:"), " ", shiny::tags$code(basename(state$input_paths$abundance_path %||% "")))),
+        shiny::tags$div(class = "kkai-kv", shiny::tags$div(shiny::tags$b("Metadata:"), " ", shiny::tags$code(basename(state$input_paths$metadata_path %||% "")))),
+        shiny::tags$div(class = "kkai-kv", shiny::tags$div(shiny::tags$b("Taxonomy:"), " ", shiny::tags$code(basename(state$input_paths$taxonomy_path %||% "")))),
+        ui_status_badge("已保存到任务输入目录", kind = "success")
+      )
+    })
 
     output$group_var_ui <- shiny::renderUI({
       if (is.null(state$input_paths) || is.null(state$input_paths$metadata_path) || !file.exists(state$input_paths$metadata_path)) {
@@ -237,7 +224,8 @@ mod_quick_start_server <- function(id, state) {
       )
       shiny::tags$div(
         class = "kkai-param-summary",
-        shiny::tags$div(class = "kkai-results-summary",
+        shiny::tags$div(
+          class = "kkai-results-summary",
           shiny::tags$div(shiny::tags$b("分组变量："), " ", shiny::tags$code(params$group_var)),
           shiny::tags$div(shiny::tags$b("分类层级："), " ", shiny::tags$code(params$tax_level)),
           shiny::tags$div(shiny::tags$b("Beta 距离："), " ", shiny::tags$code(params$beta_distance))
@@ -274,10 +262,7 @@ mod_quick_start_server <- function(id, state) {
     output$check_status <- shiny::renderUI({
       res <- check_result_rv()
       if (is.null(res) || !nrow(res$checks)) return(NULL)
-      shiny::tags$div(
-        class = "kkai-check-preview",
-        DT::DTOutput(session$ns("check_table"))
-      )
+      shiny::tags$div(class = "kkai-check-preview", DT::DTOutput(session$ns("check_table")))
     })
 
     output$check_table <- DT::renderDT({
@@ -286,46 +271,92 @@ mod_quick_start_server <- function(id, state) {
       DT::datatable(res$checks, rownames = FALSE, options = list(pageLength = 5, dom = "tip", autoWidth = TRUE))
     })
 
+    output$run_full_btn <- shiny::renderUI({
+      is_running <- identical(state$status %||% "", "running_full_workflow")
+      shiny::tagList(
+        shiny::actionButton(
+          session$ns("run_full"),
+          if (is_running) "分析运行中..." else "运行完整分析",
+          class = "btn btn-primary primary-button",
+          disabled = is_running
+        ),
+        if (is_running) {
+          shiny::actionButton(
+            session$ns("cancel_run"),
+            "终止任务",
+            class = "btn btn-danger",
+            style = "margin-left: 10px;"
+          )
+        }
+      )
+    })
+
+    shiny::observeEvent(input$cancel_run, {
+      state$cancel_run <- TRUE
+      shiny::showNotification("正在请求终止任务，将在当前步骤完成后停止...", type = "warning")
+    })
+
     output$workflow_status <- shiny::renderUI({
-      if (is.null(run_steps())) {
-        return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "运行完整分析后，这里会显示每一步状态。"))
+      if (is.null(state$job_dir)) {
+        return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "请先保存上传文件，再运行完整分析。"))
       }
       if (!is.null(run_error())) {
         return(shiny::tags$div(class = "kkai-alert kkai-alert--warning", run_error()))
       }
+
+      all_status <- state$step_status %||% workflow_default_step_status()
+      overall_label <- if (identical(state$status %||% "", "running_full_workflow")) {
+        "running"
+      } else if (any(unlist(all_status, use.names = FALSE) == "failed")) {
+        "warning"
+      } else if (any(unlist(all_status, use.names = FALSE) == "warning")) {
+        "warning"
+      } else if (all(unlist(all_status, use.names = FALSE) %in% c("done", "skipped"))) {
+        "done"
+      } else {
+        state$status %||% "idle"
+      }
+
+      current_label <- "未开始"
+      current_detail <- ""
+      if (!is.null(state$current_step) && state$current_step %in% steps_spec$step_id) {
+        current_label <- steps_spec$label_zh[steps_spec$step_id == state$current_step][[1]]
+        current_detail <- step_message(state$current_step)
+      }
+
       shiny::tags$div(
         class = "kkai-alert kkai-alert--success",
         shiny::tags$div(
           class = "kkai-results-summary",
-          shiny::tags$span("状态："),
-          ui_status_badge(state$status %||% "idle", kind = if (grepl("error|fail", state$status %||% "", ignore.case = TRUE)) "error" else if (grepl("running", state$status %||% "", ignore.case = TRUE)) "warning" else "success")
-        )
+          shiny::tags$div(shiny::tags$b("任务 ID："), " ", shiny::tags$code(state$job_id %||% "(none)")),
+          shiny::tags$div(shiny::tags$b("总体状态："), " ", ui_status_badge(overall_label, kind = status_badge_kind(overall_label))),
+          shiny::tags$div(shiny::tags$b("当前步骤："), " ", current_label)
+        ),
+        if (nzchar(current_detail)) shiny::tags$div(class = "kkai-muted", current_detail) else NULL
       )
     })
 
     output$step_list <- shiny::renderUI({
-      df <- run_steps()
-      if (is.null(df) || nrow(df) == 0) return(NULL)
+      all_status <- state$step_status %||% workflow_default_step_status()
+      all_message <- state$step_message %||% workflow_default_step_message()
+
       shiny::tags$div(
         class = "kkai-steps",
-        lapply(seq_len(nrow(df)), function(i) {
-          st <- df$status[[i]] %||% "pending"
-          badge_kind <- switch(
-            st,
-            done = "success",
-            running = "warning",
-            failed = "error",
-            skipped = "warning",
-            pending = "warning",
-            "warning"
-          )
+        lapply(seq_len(nrow(steps_spec)), function(i) {
+          step_id <- steps_spec$step_id[[i]]
+          st <- all_status[[step_id]] %||% "waiting"
+          detail <- all_message[[step_id]] %||% ""
+          if (!nzchar(detail) && identical(st, "waiting")) {
+            detail <- steps_spec$placeholder[[i]]
+          }
+
           shiny::tags$div(
             class = "kkai-step-row",
-            shiny::tags$div(class = "kkai-step-name", df$step[[i]]),
+            shiny::tags$div(class = "kkai-step-name", steps_spec$label_zh[[i]]),
             shiny::tags$div(
               class = "kkai-step-meta",
-              ui_status_badge(st, kind = badge_kind),
-              if (nzchar(df$detail[[i]] %||% "")) shiny::tags$span(class = "kkai-step-detail", df$detail[[i]]) else NULL
+              ui_status_badge(st, kind = status_badge_kind(st)),
+              if (nzchar(detail)) shiny::tags$span(class = "kkai-step-detail", detail) else NULL
             )
           )
         })
@@ -348,7 +379,8 @@ mod_quick_start_server <- function(id, state) {
         ),
         shiny::tags$details(
           shiny::tags$summary("开发者信息"),
-          shiny::tags$div(class = "kkai-details-grid",
+          shiny::tags$div(
+            class = "kkai-details-grid",
             shiny::tags$div(shiny::tags$b("任务目录：")),
             shiny::tags$div(class = "kkai-codeblock", normalizePath(state$job_dir, winslash = "/", mustWork = FALSE))
           )
@@ -363,7 +395,8 @@ mod_quick_start_server <- function(id, state) {
       if (isTRUE(report_exists)) ensure_report_resource(state$job_id, state$job_dir)
 
       shiny::tagList(
-        shiny::tags$div(class = "kkai-quick-actions",
+        shiny::tags$div(
+          class = "kkai-quick-actions",
           if (isTRUE(report_exists)) {
             shiny::tags$a(href = paste0("quickstart_report_", state$job_id, "/report.html"), target = "_blank", class = "btn btn-outline-primary", "打开报告")
           } else {
@@ -404,6 +437,10 @@ mod_quick_start_server <- function(id, state) {
       }
     )
 
+    shiny::observe({
+      check_result_rv(state$check_result)
+    })
+
     shiny::observeEvent(input$create_job, {
       shiny::req(input$abundance, input$metadata, input$taxonomy)
       set_message("")
@@ -412,11 +449,14 @@ mod_quick_start_server <- function(id, state) {
         job_id <- basename(job_dir)
         state$job_id <- job_id
         state$job_dir <- job_dir
+        reset_workflow_results(state)
+        reset_workflow_steps(state)
         workflow_set_status(state, "job_created")
 
         state$active_job_id <- job_id
         state$active_job_dir <- job_dir
         state$active_report_path <- file.path(job_dir, "report", "report.html")
+        workflow_sync_active_job(state, source = "current_run")
         state$active_status <- state$status %||% "job_created"
         state$active_source <- "当前新运行任务"
 
@@ -438,7 +478,6 @@ mod_quick_start_server <- function(id, state) {
         state$input_data <- NULL
         state$check_result <- NULL
         state$parameters <- state$parameters %||% list()
-        upload_saved(TRUE)
 
         append_reproducibility(job_dir, list(
           job_id = job_id,
@@ -474,15 +513,39 @@ mod_quick_start_server <- function(id, state) {
           )
         }
         group_var <- input$group_var %||% state$parameters$group_var %||% NULL
+        
+        set_step_status(state, "data_check", "running", "正在检查输入数据")
         check_res <- run_all_data_checks(state$input_data, group_var = group_var)
         state$check_result <- check_res
-        check_result_rv(check_res)
-        workflow_set_status(state, "data_checked")
+        
+        if (check_res$status == "error") {
+          set_step_status(state, "data_check", "failed", "数据检查发现错误")
+        } else if (check_res$status == "warning") {
+          set_step_status(state, "data_check", "warning", "数据检查完成，存在警告")
+        } else {
+          set_step_status(state, "data_check", "done", "数据检查完成")
+        }
+        
         save_data_check_summary(check_res, state$job_dir)
         db_upsert_job(state$job_id, state$job_dir, status = paste0("data_check_", check_res$status))
+        
+        if (check_res$status != "error") {
+          set_step_status(state, "build_dataset", "running", "正在构建 microeco 对象")
+          dataset <- build_microeco_dataset(
+            abundance = state$input_data$abundance,
+            metadata = state$input_data$metadata,
+            taxonomy = state$input_data$taxonomy
+          )
+          state$dataset <- dataset
+          save_microeco_dataset(dataset, state$job_dir)
+          set_step_status(state, "build_dataset", "done", "microeco 对象已构建")
+        }
+        
+        workflow_set_status(state, "data_checked")
         set_message(paste0("Data check complete: ", check_res$status))
         shiny::showNotification(paste0("Data check done (", check_res$status, ")."), type = "message")
       }, error = function(e) {
+        set_step_status(state, "data_check", "failed", conditionMessage(e))
         set_message(paste0("Data check failed: ", conditionMessage(e)))
         shiny::showNotification(paste0("Data check failed: ", conditionMessage(e)), type = "error", duration = NULL)
       })
@@ -517,10 +580,22 @@ mod_quick_start_server <- function(id, state) {
       }
 
       tryCatch({
-        run_steps(init_steps())
-        run_done(FALSE)
         run_error(NULL)
         zip_status("")
+        
+        # Preserve status of data_check and build_dataset if they were already done
+        current_status <- workflow_step_status_snapshot(state = state)
+        keep_data <- identical(current_status$data_check, "done") || identical(current_status$data_check, "warning")
+        keep_build <- identical(current_status$build_dataset, "done")
+        
+        reset_workflow_results(state, keep_check_result = TRUE)
+        
+        for (st in workflow_step_ids()) {
+          if (st %in% c("data_check", "build_dataset") && keep_data && keep_build) next
+          set_step_status(state, st, "waiting", "")
+        }
+        state$current_step <- if (keep_data && keep_build) "alpha" else "data_check"
+        
         workflow_set_status(state, "running_full_workflow")
 
         if (is.null(state$input_data)) {
@@ -530,6 +605,7 @@ mod_quick_start_server <- function(id, state) {
             taxonomy_path = state$input_paths$taxonomy_path
           )
         }
+
         params <- modifyList(state$parameters %||% list(), list(
           group_var = group_var,
           tax_level = input$tax_level %||% "Genus",
@@ -537,45 +613,78 @@ mod_quick_start_server <- function(id, state) {
         ))
         state$parameters <- params
 
+        n_steps <- nrow(steps_spec)
+        if (!is.null(prog_val())) {
+          try(prog_val()$close(), silent = TRUE)
+        }
+        prog <- shiny::Progress$new(session, min = 0, max = n_steps)
+        prog$set(value = 0, message = "正在运行完整分析", detail = "初始化")
+        prog_val(prog)
+
         progress_cb <- function(step_id, status, detail = NULL) {
-          set_step_status(step_id, status, detail)
+          current_status <- state$step_status %||% workflow_default_step_status()
+          done_n <- sum(unlist(current_status, use.names = FALSE) %in% c("done", "warning", "skipped", "failed"))
+          label <- steps_spec$label_zh[steps_spec$step_id == step_id][[1]] %||% step_id
+          p <- prog_val()
+          if (!is.null(p)) {
+            p$set(
+              value = min(done_n + if (identical(tolower(status %||% ""), "running")) 0.2 else 0, n_steps),
+              message = paste0("正在运行：", label),
+              detail = detail %||% status
+            )
+          }
         }
 
-        res <- run_full_analysis_workflow(
+        trigger_analysis_state_machine(
           input_data = state$input_data,
           job_dir = state$job_dir,
           group_var = group_var,
           beta_distance = input$beta_distance %||% "bray",
           tax_level = input$tax_level %||% "Genus",
+          config_path = "config.yml",
           progress_cb = progress_cb,
-          log_path = file.path(state$job_dir, "logs", "analysis_log.txt")
+          log_path = file.path(state$job_dir, "logs", "run.log"),
+          state = state
         )
 
-        state$dataset <- res$dataset
-        state$alpha_result <- res$alpha
-        state$beta_result <- res$beta
-        state$diff_result <- res$diff
-        state$ml_result <- res$ml
-        state$network_result <- res$network
-        state$key_taxa_result <- res$key_taxa
-        state$ai_result <- res$phase4b
-        state$report_paths <- list(html = res$report_path)
-        ensure_report_resource(state$job_id, state$job_dir)
-
-        if (isTRUE(res$phase4b$skipped)) {
-          set_step_status("ai", "skipped", "LLM skipped or unavailable; fallback outputs generated.")
-        }
-        set_step_status("report", "done")
-        run_done(TRUE)
-        workflow_set_status(state, "full_workflow_done")
-        set_message("完整分析已完成，报告和结果压缩包已生成。")
-        shiny::showNotification("完整分析已完成。", type = "message", duration = NULL)
       }, error = function(e) {
         workflow_set_status(state, "full_workflow_error")
         run_error(paste0("运行失败：", conditionMessage(e)))
         set_message(paste0("运行失败：", conditionMessage(e)))
-        shiny::showNotification("运行失败，请查看快速开始页面中的详情。", type = "error", duration = NULL)
+        shiny::showNotification("运行启动失败，请查看快速开始页面中的详情。", type = "error", duration = NULL)
       })
     })
+
+    shiny::observeEvent(state$status, {
+      st <- state$status %||% ""
+      if (st == "full_workflow_done" || st == "full_workflow_error") {
+        p <- prog_val()
+        if (!is.null(p)) {
+          try(p$close(), silent = TRUE)
+          prog_val(NULL)
+        }
+        
+        if (st == "full_workflow_error") {
+          err_msg <- state$wf_error %||% "未知错误"
+          run_error(paste0("运行失败：", err_msg))
+          set_message(paste0("运行失败：", err_msg))
+          shiny::showNotification("运行失败，请查看详情。", type = "error", duration = NULL)
+        } else {
+          ensure_report_resource(state$job_id, state$job_dir)
+          terminal_statuses <- unlist(state$step_status %||% workflow_default_step_status(), use.names = FALSE)
+          if (any(terminal_statuses == "failed")) {
+            set_message("完整分析已完成，但部分步骤失败或需要复核。")
+            shiny::showNotification("完整分析已完成，但部分步骤失败或需要复核。", type = "warning", duration = NULL)
+          } else if (any(terminal_statuses == "warning")) {
+            set_message("完整分析已完成，部分步骤带有警告。")
+            shiny::showNotification("完整分析已完成，部分步骤带有警告。", type = "warning", duration = NULL)
+          } else {
+            set_message("完整分析已完成，报告和结果压缩包已生成。")
+            shiny::showNotification("完整分析已完成。", type = "message", duration = NULL)
+          }
+        }
+      }
+    }, ignoreInit = TRUE)
+
   })
 }

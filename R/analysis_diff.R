@@ -1,296 +1,948 @@
-# Differential abundance analysis (Phase 3).
-# Methods: Wilcoxon (2 groups), Kruskal-Wallis (>= 3 groups), FDR correction.
-# Outputs:
-# - tables/differential_taxa.csv
-# - tables/differential_taxa_significant.csv
-# - json/diff_summary.json
-# - figures/diff_volcano.pdf + .png
-# - figures/diff_taxa_barplot.pdf + .png
+# Differential abundance analysis.
+#
+# The selected taxonomic rank is aggregated explicitly from otu_table and
+# tax_table.  This avoids treating ASVs as genera when microeco keeps lineage
+# strings as row names.  The primary analysis is prevalence-filtered,
+# non-parametric and reports BH-FDR together with effect sizes.
 
 if (!exists("clean_taxon_label", mode = "function")) {
   clean_taxon_label <- function(x) {
     if (is.null(x)) return(character(0))
-    x <- as.character(x)
+    x <- safe_utf8_label(x, fallback = "")
     vapply(x, function(s) {
       if (is.na(s)) return(NA_character_)
-      s <- trimws(s)
-      if (!nzchar(s)) return(s)
-      parts <- strsplit(s, "\\|")[[1]]
-      parts <- trimws(parts)
+      parts <- trimws(strsplit(s, "\\|")[[1]])
       parts <- parts[nzchar(parts)]
       if (length(parts) == 0) s else parts[[length(parts)]]
     }, character(1))
   }
 }
 
-run_diff_analysis <- function(dataset, group_var, tax_level, job_dir) {
+diff_missing_taxon <- function(x) {
+  is.na(x) | !nzchar(trimws(as.character(x))) |
+    tolower(trimws(as.character(x))) %in% c("na", "nan", "none", "unknown", "unassigned", "unclassified")
+}
+
+prepare_diff_abundance <- function(dataset, tax_level) {
+  if (is.null(dataset$otu_table) || is.null(dataset$tax_table)) {
+    stop("prepare_diff_abundance(): dataset must contain otu_table and tax_table.", call. = FALSE)
+  }
+  tax <- as.data.frame(dataset$tax_table, check.names = FALSE, stringsAsFactors = FALSE)
+  otu <- as.data.frame(dataset$otu_table, check.names = FALSE)
+  if (!tax_level %in% names(tax)) {
+    stop("prepare_diff_abundance(): tax_level '", tax_level, "' not found in tax_table. Available ranks: ",
+         paste(names(tax), collapse = ", "), call. = FALSE)
+  }
+
+  common <- intersect(rownames(otu), rownames(tax))
+  if (length(common) < 1) stop("prepare_diff_abundance(): no features match between otu_table and tax_table.", call. = FALSE)
+  otu <- otu[common, , drop = FALSE]
+  tax <- tax[common, , drop = FALSE]
+  otu[] <- lapply(otu, function(x) suppressWarnings(as.numeric(x)))
+  if (any(!is.finite(as.matrix(otu)), na.rm = TRUE) || any(as.matrix(otu) < 0, na.rm = TRUE)) {
+    stop("prepare_diff_abundance(): abundance values must be finite and non-negative.", call. = FALSE)
+  }
+
+  rank_names <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+  rank_names <- rank_names[rank_names %in% names(tax)]
+  target_index <- match(tax_level, rank_names)
+  if (is.na(target_index)) {
+    lineage_ranks <- tax_level
+  } else {
+    lineage_ranks <- rank_names[seq_len(target_index)]
+  }
+
+  lineage <- tax[, lineage_ranks, drop = FALSE]
+  lineage[] <- lapply(lineage, function(x) safe_utf8_label(as.character(x), fallback = ""))
+  for (j in seq_along(lineage)) {
+    miss <- diff_missing_taxon(lineage[[j]])
+    lineage[[j]][miss] <- "Unclassified"
+  }
+
+  taxon_id <- apply(lineage, 1, paste, collapse = "|")
+  target <- lineage[[ncol(lineage)]]
+  parent <- if (ncol(lineage) > 1) lineage[[ncol(lineage) - 1L]] else rep("", nrow(lineage))
+  display <- ifelse(target == "Unclassified" & nzchar(parent), paste0("Unclassified_", parent), target)
+
+  aggregated <- rowsum(as.matrix(otu), group = taxon_id, reorder = FALSE, na.rm = TRUE)
+  sample_totals <- colSums(aggregated, na.rm = TRUE)
+  if (any(sample_totals <= 0)) {
+    stop("prepare_diff_abundance(): one or more samples have zero total abundance.", call. = FALSE)
+  }
+  relative <- sweep(aggregated, 2, sample_totals, "/")
+
+  first_idx <- match(rownames(relative), taxon_id)
+  labels <- display[first_idx]
+  names(labels) <- rownames(relative)
+  list(abundance = as.data.frame(relative, check.names = FALSE), labels = labels)
+}
+
+sanitize_diff_inputs <- function(abund, samp, group_var) {
+  if (!is.data.frame(abund)) stop("sanitize_diff_inputs(): abund must be a data.frame.", call. = FALSE)
+  if (!is.data.frame(samp)) stop("sanitize_diff_inputs(): samp must be a data.frame.", call. = FALSE)
+  assert_non_empty_string(group_var, "group_var")
+  samp <- as.data.frame(samp, check.names = FALSE, stringsAsFactors = FALSE)
+  if (!group_var %in% names(samp)) stop("sanitize_diff_inputs(): group_var not found: ", group_var, call. = FALSE)
+
+  common <- intersect(colnames(abund), rownames(samp))
+  if (length(common) < 4) stop("sanitize_diff_inputs(): fewer than four samples match abundance and metadata.", call. = FALSE)
+  abund <- abund[, common, drop = FALSE]
+  samp <- samp[common, , drop = FALSE]
+  grp <- safe_utf8_label(as.character(samp[[group_var]]), fallback = "")
+  keep <- !is.na(grp) & nzchar(trimws(grp))
+  abund <- abund[, keep, drop = FALSE]
+  samp <- samp[keep, , drop = FALSE]
+  samp[[group_var]] <- droplevels(factor(grp[keep]))
+  list(abund = abund, samp = samp)
+}
+
+cliffs_delta <- function(g1, g2) {
+  comparisons <- outer(g2, g1, "-")
+  (sum(comparisons > 0) - sum(comparisons < 0)) / length(comparisons)
+}
+
+cliffs_magnitude <- function(x) {
+  ax <- abs(x)
+  if (is.na(ax)) return(NA_character_)
+  if (ax < 0.147) "negligible" else if (ax < 0.33) "small" else if (ax < 0.474) "medium" else "large"
+}
+
+kruskal_epsilon_squared <- function(statistic, n, k) {
+  if (is.na(statistic) || n <= k) return(NA_real_)
+  max(0, min(1, (as.numeric(statistic) - k + 1) / (n - k)))
+}
+
+derive_diff_direction <- function(log2fc, group_levels) {
+  if (length(group_levels) != 2) return(rep("See group summaries", length(log2fc)))
+  vapply(log2fc, function(x) {
+    if (is.na(x)) return("Undetermined")
+    if (x > 0) paste0("Higher in ", group_levels[[2]]) else if (x < 0) paste0("Higher in ", group_levels[[1]]) else "No change"
+  }, character(1))
+}
+
+derive_diff_significance <- function(fdr) {
+  ifelse(!is.na(fdr) & fdr < 0.05, "significant", ifelse(is.na(fdr), "not_tested", "not_significant"))
+}
+
+normalize_diff_result_columns <- function(df) {
+  if (!"fdr" %in% names(df)) {
+    fdr_col <- intersect(c("FDR", "padj", "p_adj", "adj_p", "qvalue", "q_value"), names(df))
+    df$fdr <- if (length(fdr_col)) suppressWarnings(as.numeric(df[[fdr_col[[1]]]])) else NA_real_
+  }
+  df$fdr <- suppressWarnings(as.numeric(df$fdr))
+  if (!"p_value" %in% names(df)) df$p_value <- NA_real_
+  if (!"tested" %in% names(df)) df$tested <- !is.na(df$p_value)
+  if (!"effect_size" %in% names(df)) df$effect_size <- if ("log2fc" %in% names(df)) abs(df$log2fc) else NA_real_
+  df$effect_size <- suppressWarnings(as.numeric(df$effect_size))
+  if (!"log2fc" %in% names(df)) df$log2fc <- NA_real_
+  if (!"effect_size_metric" %in% names(df)) df$effect_size_metric <- if (any(!is.na(df$log2fc))) "absolute log2FC" else "not available"
+  if (!"effect_magnitude" %in% names(df)) df$effect_magnitude <- "not reported"
+  if (!"test_method" %in% names(df)) df$test_method <- if (any(!is.na(df$log2fc))) "Wilcoxon rank-sum" else "Kruskal-Wallis"
+  if (!"significant" %in% names(df)) df$significant <- !is.na(df$fdr) & df$fdr < 0.05
+  if (!"taxon_label" %in% names(df)) df$taxon_label <- if ("taxon" %in% names(df)) df$taxon else "Unknown taxon"
+  if (!"display_taxon" %in% names(df)) df$display_taxon <- df$taxon_label
+  df
+}
+
+clean_diff_taxon_name <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- "Unknown taxon"
+  # Historical CSV files may contain a lineage; only the terminal display label
+  # belongs on the axis. Underscores are presentation separators, not taxonomy.
+  x <- vapply(strsplit(x, "\\|", fixed = FALSE), function(parts) tail(parts[nzchar(parts)], 1), character(1))
+  x <- gsub("_+", " ", x)
+  trimws(gsub("\\s+", " ", x))
+}
+
+is_completely_unclassified_taxon <- function(x) {
+  normalized <- tolower(gsub("[^[:alnum:]]+", " ", clean_diff_taxon_name(x)))
+  normalized <- trimws(gsub("\\s+", " ", normalized))
+  normalized %in% c("unclassified", "unclassified unclassified", "unknown", "unassigned", "uncultured")
+}
+
+derive_enriched_groups <- function(diff_table, group_summary, pairwise = NULL) {
+  out <- rep(NA_character_, nrow(diff_table))
+  method <- rep(NA_character_, nrow(diff_table))
+  if (!is.data.frame(group_summary) || !all(c("taxon", "group") %in% names(group_summary))) {
+    return(data.frame(enriched_group = out, enriched_group_method = method, stringsAsFactors = FALSE))
+  }
+
+  for (i in seq_len(nrow(diff_table))) {
+    taxon_id <- as.character(diff_table$taxon[[i]])
+    gs <- group_summary[as.character(group_summary$taxon) == taxon_id, , drop = FALSE]
+    if (!nrow(gs)) next
+    # Existing post-hoc comparisons take precedence over descriptive summaries.
+    if (is.data.frame(pairwise) && all(c("taxon", "group_1", "group_2", "cliffs_delta") %in% names(pairwise))) {
+      pw <- pairwise[as.character(pairwise$taxon) == taxon_id, , drop = FALSE]
+      padj_col <- intersect(c("p_adjust_holm", "fdr", "p_adj", "padj"), names(pw))
+      if (nrow(pw) && length(padj_col)) {
+        padj <- suppressWarnings(as.numeric(pw[[padj_col[[1]]]]))
+        delta <- suppressWarnings(as.numeric(pw$cliffs_delta))
+        keep <- is.finite(padj) & padj < 0.05 & is.finite(delta) & delta != 0
+        if (any(keep)) {
+          winners <- ifelse(delta[keep] > 0, as.character(pw$group_2[keep]), as.character(pw$group_1[keep]))
+          wins <- sort(table(winners), decreasing = TRUE)
+          if (length(wins) == 1 || unname(wins[[1]]) > unname(wins[[2]])) {
+            out[[i]] <- names(wins)[[1]]
+            method[[i]] <- "post-hoc determined"
+            next
+          }
+        }
+      }
+    }
+
+    med <- if ("median_abundance" %in% names(gs)) suppressWarnings(as.numeric(gs$median_abundance)) else rep(NA_real_, nrow(gs))
+    finite_med <- is.finite(med)
+    if (!any(finite_med)) {
+      out[[i]] <- "Undetermined"
+      method[[i]] <- "undetermined"
+      next
+    }
+    best <- which(finite_med & med == max(med[finite_med]))
+    if (length(best) != 1) {
+      out[[i]] <- "Undetermined"
+      method[[i]] <- "tied group medians"
+      next
+    }
+    out[[i]] <- as.character(gs$group[[best]])
+    method[[i]] <- "highest group median"
+  }
+  data.frame(enriched_group = out, enriched_group_method = method, stringsAsFactors = FALSE)
+}
+
+resolve_direction_groups <- function(group_levels) {
+  groups <- unique(as.character(group_levels))
+  groups <- groups[!is.na(groups) & nzchar(groups) & groups != "Undetermined"]
+  if (length(groups) != 2) {
+    return(list(valid = FALSE, negative = NA_character_, positive = NA_character_,
+                reason = "Directional effect plots require exactly two comparison groups."))
+  }
+  upper <- toupper(groups)
+  if (all(c("HEB", "NMG") %in% upper)) {
+    negative <- groups[match("NMG", upper)]
+    positive <- groups[match("HEB", upper)]
+  } else {
+    negative <- groups[[1]]
+    positive <- groups[[2]]
+  }
+  list(valid = TRUE, negative = negative, positive = positive, reason = NULL)
+}
+
+add_directional_effect_columns <- function(diff_table, group_levels) {
+  df <- normalize_diff_result_columns(diff_table)
+  direction <- resolve_direction_groups(group_levels)
+  metric_is_epsilon <- grepl("epsilon", as.character(df$effect_size_metric), ignore.case = TRUE)
+  df$epsilon_squared <- ifelse(metric_is_epsilon, abs(df$effect_size), NA_real_)
+  df$FDR <- df$fdr
+  df$group_negative <- if (isTRUE(direction$valid)) direction$negative else NA_character_
+  df$group_positive <- if (isTRUE(direction$valid)) direction$positive else NA_character_
+  df$signed_epsilon2 <- NA_real_
+  if (isTRUE(direction$valid)) {
+    df$signed_epsilon2[metric_is_epsilon & df$enriched_group == direction$positive] <- df$epsilon_squared[metric_is_epsilon & df$enriched_group == direction$positive]
+    df$signed_epsilon2[metric_is_epsilon & df$enriched_group == direction$negative] <- -df$epsilon_squared[metric_is_epsilon & df$enriched_group == direction$negative]
+  }
+  df$significance <- derive_diff_significance(df$fdr)
+  df$significance_stars <- ifelse(
+    !is.finite(df$fdr), "",
+    ifelse(df$fdr < 0.001, "***", ifelse(df$fdr < 0.01, "**", ifelse(df$fdr < 0.05, "*", "ns")))
+  )
+  df
+}
+
+format_diff_q_value <- function(fdr) {
+  fdr <- suppressWarnings(as.numeric(fdr))
+  ifelse(!is.finite(fdr), "q = NA",
+         ifelse(fdr < 0.001, "q < 0.001", paste0("q = ", formatC(fdr, format = "g", digits = 3))))
+}
+
+prepare_diff_directional_data <- function(diff_table, group_levels = NULL,
+                                          top_n = 10, show_unclassified = FALSE,
+                                          fdr_cutoff = 0.05) {
+  if (!is.data.frame(diff_table)) stop("prepare_diff_directional_data(): diff_table must be a data.frame.", call. = FALSE)
+  top_n <- as.integer(top_n)
+  if (length(top_n) != 1 || is.na(top_n) || top_n < 1) stop("prepare_diff_directional_data(): top_n must be >= 1.", call. = FALSE)
+  df <- normalize_diff_result_columns(diff_table)
+
+  if (is.null(group_levels)) {
+    stored_negative <- unique(as.character(df$group_negative %||% character()))
+    stored_positive <- unique(as.character(df$group_positive %||% character()))
+    stored_negative <- stored_negative[!is.na(stored_negative) & nzchar(stored_negative)]
+    stored_positive <- stored_positive[!is.na(stored_positive) & nzchar(stored_positive)]
+    group_levels <- if (length(stored_negative) == 1 && length(stored_positive) == 1) {
+      c(stored_negative, stored_positive)
+    } else {
+      unique(as.character(df$enriched_group %||% character()))
+    }
+  }
+  direction <- resolve_direction_groups(group_levels)
+  if (!isTRUE(direction$valid)) {
+    out <- df[0, , drop = FALSE]
+    attr(out, "empty_message") <- direction$reason
+    return(out)
+  }
+
+  df <- add_directional_effect_columns(df, c(direction$negative, direction$positive))
+  metric_is_epsilon <- grepl("epsilon", as.character(df$effect_size_metric), ignore.case = TRUE)
+  metric_is_cliff <- grepl("cliff", as.character(df$effect_size_metric), ignore.case = TRUE)
+  signed_cliff <- ifelse(
+    df$enriched_group == direction$positive, abs(df$effect_size),
+    ifelse(df$enriched_group == direction$negative, -abs(df$effect_size), NA_real_)
+  )
+  df$signed_effect_size <- ifelse(metric_is_epsilon, df$signed_epsilon2,
+                                  ifelse(metric_is_cliff, signed_cliff, NA_real_))
+  df$directional_metric <- ifelse(metric_is_epsilon, "Signed Kruskal-Wallis epsilon-squared",
+                                  ifelse(metric_is_cliff, "Cliff's delta", "Signed effect size"))
+  significant <- is.finite(df$fdr) & df$fdr < fdr_cutoff
+  missing_effect <- significant & !is.finite(df$signed_effect_size)
+  if (any(missing_effect)) {
+    warning(sum(missing_effect), " significant taxa omitted from the directional plot because direction or effect size is unavailable.", call. = FALSE)
+  }
+  df <- df[significant & is.finite(df$signed_effect_size), , drop = FALSE]
+  if (!nrow(df)) {
+    attr(df, "empty_message") <- "No taxa met the selected significance threshold with a determinable direction."
+    return(df)
+  }
+  df$display_taxon <- clean_diff_taxon_name(df$display_taxon)
+  if (!isTRUE(show_unclassified)) df <- df[!is_completely_unclassified_taxon(df$display_taxon), , drop = FALSE]
+  if (!nrow(df)) {
+    attr(df, "empty_message") <- "No taxa remained after the display filters were applied."
+    return(df)
+  }
+  df$q_label <- format_diff_q_value(df$fdr)
+  df <- utils::head(df[order(-abs(df$signed_effect_size), df$fdr, na.last = TRUE), , drop = FALSE], top_n)
+  df$axis_taxon <- make.unique(stringr::str_wrap(df$display_taxon, width = 34), sep = " ")
+  df$axis_taxon <- factor(df$axis_taxon, levels = rev(df$axis_taxon))
+  attr(df, "group_negative") <- direction$negative
+  attr(df, "group_positive") <- direction$positive
+  rownames(df) <- NULL
+  df
+}
+
+build_diff_directional_plot <- function(plot_data, show_fdr = FALSE,
+                                        show_significance = TRUE) {
+  negative <- attr(plot_data, "group_negative") %||% "Negative direction"
+  positive <- attr(plot_data, "group_positive") %||% "Positive direction"
+  if (!is.data.frame(plot_data) || !nrow(plot_data)) {
+    message <- attr(plot_data, "empty_message") %||% "No taxa met the selected significance threshold."
+    return(
+      ggplot2::ggplot() +
+        ggplot2::annotate("text", x = 0.5, y = 0.55, label = message, size = 4, color = "#4B5563", lineheight = 1.1) +
+        ggplot2::xlim(0, 1) + ggplot2::ylim(0, 1) +
+        ggplot2::labs(title = "Directional differential abundance") +
+        ggplot2::theme_void(base_family = "sans") +
+        ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", color = NA),
+                       plot.title = ggplot2::element_text(face = "bold", size = 13, hjust = 0.5),
+                       plot.margin = ggplot2::margin(18, 18, 18, 18))
+    )
+  }
+
+  palette <- c(stats::setNames("#E69F00", negative), stats::setNames("#0072B2", positive),
+               "Undetermined" = "#7A7A7A")
+  metric <- unique(as.character(plot_data$directional_metric))
+  metric <- metric[!is.na(metric) & nzchar(metric)][[1]]
+  title <- sprintf("Differentially abundant taxa between %s and %s", negative, positive)
+  label <- if (isTRUE(show_fdr)) plot_data$q_label else rep("", nrow(plot_data))
+  if (isTRUE(show_significance)) {
+    label <- trimws(paste(label, plot_data$significance_stars))
+  }
+  plot_data$plot_label <- label
+  plot_data$label_hjust <- ifelse(plot_data$signed_effect_size >= 0, -0.35, 1.35)
+  x_expansion <- if (isTRUE(show_fdr)) c(0.34, 0.24) else c(0.16, 0.16)
+
+  ggplot2::ggplot(plot_data, ggplot2::aes(x = .data$signed_effect_size, y = .data$axis_taxon)) +
+    ggplot2::geom_vline(xintercept = 0, linetype = 2, linewidth = 0.55, color = "#7A7A7A") +
+    ggplot2::geom_point(ggplot2::aes(color = .data$enriched_group), size = 4.2, alpha = 0.95) +
+    ggplot2::geom_text(ggplot2::aes(label = .data$plot_label, hjust = .data$label_hjust), size = 3.2,
+                       color = "#374151", show.legend = FALSE) +
+    ggplot2::scale_color_manual(values = palette, name = "Enriched group", drop = FALSE) +
+    ggplot2::scale_y_discrete(labels = function(x) parse(text = diff_taxon_axis_labels(x))) +
+    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = x_expansion)) +
+    ggplot2::coord_cartesian(clip = "off") +
+    ggplot2::labs(
+      title = title,
+      subtitle = paste0("Ranked by absolute ", gsub("^Signed ", "", metric)),
+      x = metric, y = NULL,
+      caption = paste0(negative, " enriched  <---          --->  ", positive, " enriched")
+    ) +
+    ggplot2::theme_classic(base_size = 13, base_family = "sans") +
+    ggplot2::theme(
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.grid.major.x = ggplot2::element_line(color = "#E5E7EB", linewidth = 0.35),
+      panel.grid.major.y = ggplot2::element_blank(), panel.grid.minor = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_text(size = 10, color = "#1F2937", lineheight = 0.95),
+      axis.text.x = ggplot2::element_text(color = "#374151"),
+      plot.title = ggplot2::element_text(size = 14, face = "bold", hjust = 0, color = "#111827"),
+      plot.subtitle = ggplot2::element_text(size = 10.5, color = "#4B5563"),
+      plot.caption = ggplot2::element_text(size = 10, face = "bold", hjust = 0.5, color = "#4B5563"),
+      legend.position = "top", legend.justification = "left",
+      plot.margin = ggplot2::margin(12, 55, 12, 20)
+    )
+}
+
+prepare_diff_lollipop_data <- function(diff_table, top_n = 15,
+                                       show_unclassified = FALSE,
+                                       sort_by = c("effect_size", "fdr"),
+                                       fdr_cutoff = 0.05) {
+  if (!is.data.frame(diff_table)) stop("prepare_diff_lollipop_data(): diff_table must be a data.frame.", call. = FALSE)
+  sort_by <- match.arg(sort_by)
+  top_n <- as.integer(top_n)
+  if (length(top_n) != 1 || is.na(top_n) || top_n < 1) stop("prepare_diff_lollipop_data(): top_n must be >= 1.", call. = FALSE)
+  df <- normalize_diff_result_columns(diff_table)
+  significant <- is.finite(df$fdr) & df$fdr < fdr_cutoff
+  missing_effect <- significant & !is.finite(df$effect_size)
+  if (any(missing_effect)) {
+    warning(sum(missing_effect), " significant taxa omitted from the lollipop plot because effect_size is missing.", call. = FALSE)
+  }
+  df <- df[significant & is.finite(df$effect_size), , drop = FALSE]
+  if (!nrow(df)) return(df)
+
+  df$display_taxon <- clean_diff_taxon_name(df$display_taxon)
+  if (!isTRUE(show_unclassified)) df <- df[!is_completely_unclassified_taxon(df$display_taxon), , drop = FALSE]
+  if (!nrow(df)) return(df)
+  if (!"enriched_group" %in% names(df)) df$enriched_group <- NA_character_
+  direction_group <- ifelse(grepl("^Higher in ", df$direction), sub("^Higher in ", "", df$direction), NA_character_)
+  df$enriched_group <- ifelse(is.na(df$enriched_group) | !nzchar(df$enriched_group), direction_group, as.character(df$enriched_group))
+  df$enriched_group[is.na(df$enriched_group) | !nzchar(df$enriched_group)] <- "Undetermined"
+  df$plot_fdr <- pmax(df$fdr, 1e-300)
+  df$neg_log10_fdr <- -log10(df$plot_fdr)
+  df$fdr_label <- paste0("FDR = ", formatC(df$fdr, format = "g", digits = 3))
+  ord <- if (sort_by == "effect_size") order(-df$effect_size, df$fdr, na.last = TRUE) else order(df$fdr, -df$effect_size, na.last = TRUE)
+  df <- utils::head(df[ord, , drop = FALSE], top_n)
+  df$axis_taxon <- make.unique(stringr::str_wrap(df$display_taxon, width = 34), sep = " ")
+  df$axis_taxon <- factor(df$axis_taxon, levels = rev(df$axis_taxon))
+  rownames(df) <- NULL
+  df
+}
+
+diff_taxon_axis_labels <- function(x) {
+  vapply(x, function(label) {
+    plain <- gsub("\\n", " ", label)
+    non_latin_descriptor <- grepl("unclassified|uncultured|unknown|clade|group|metagenome|bacterium", plain, ignore.case = TRUE)
+    simple_latin <- grepl("^[A-Z][A-Za-z.-]+( [a-z][A-Za-z.-]+)?$", plain)
+    if (!non_latin_descriptor && simple_latin) paste0("italic('", gsub("'", "\\\\'", plain), "')") else paste0("'", gsub("'", "\\\\'", label), "'")
+  }, character(1))
+}
+
+build_diff_lollipop_plot <- function(plot_data, show_fdr_labels = FALSE,
+                                     sort_by = c("effect_size", "fdr")) {
+  sort_by <- match.arg(sort_by)
+  if (!is.data.frame(plot_data) || !nrow(plot_data)) {
+    return(
+      ggplot2::ggplot() +
+        ggplot2::annotate("text", x = 0.5, y = 0.55, label = "No taxa met BH-FDR < 0.05\nand the plotting requirements", size = 4, color = "#4B5563") +
+        ggplot2::xlim(0, 1) + ggplot2::ylim(0, 1) +
+        ggplot2::labs(title = "Top differentially abundant taxa") +
+        ggplot2::theme_void(base_family = "sans") +
+        ggplot2::theme(plot.background = ggplot2::element_rect(fill = "white", color = NA),
+                       plot.title = ggplot2::element_text(face = "bold", size = 13, hjust = 0.5),
+                       plot.margin = ggplot2::margin(18, 18, 18, 18))
+    )
+  }
+
+  groups <- unique(as.character(plot_data$enriched_group))
+  # Okabe-Ito colors remain distinguishable for the common forms of color-
+  # vision deficiency; interpolate only when a design has more than 8 groups.
+  colorblind_base <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7",
+                       "#D55E00", "#56B4E9", "#F0E442", "#000000")
+  color_values <- if (length(groups) <= length(colorblind_base)) {
+    colorblind_base[seq_along(groups)]
+  } else {
+    grDevices::colorRampPalette(colorblind_base)(length(groups))
+  }
+  palette <- stats::setNames(color_values, groups)
+  if ("Undetermined" %in% groups) palette[["Undetermined"]] <- "#7A7A7A"
+  metric <- unique(as.character(plot_data$effect_size_metric))
+  metric <- metric[!is.na(metric) & nzchar(metric)]
+  kw_metric <- any(grepl("epsilon", metric, ignore.case = TRUE))
+  subtitle <- if (sort_by == "effect_size" && kw_metric) {
+    "Ranked by Kruskal-Wallis epsilon-squared"
+  } else if (sort_by == "effect_size") {
+    paste0("Ranked by ", if (length(metric)) metric[[1]] else "effect size")
+  } else {
+    "Ranked by BH-FDR"
+  }
+  x_title <- if (kw_metric) "Kruskal-Wallis epsilon-squared" else if (length(metric)) metric[[1]] else "Effect size"
+  method_note <- if ("enriched_group_method" %in% names(plot_data) && any(plot_data$enriched_group_method == "post-hoc confirmed", na.rm = TRUE)) {
+    "Color indicates enriched group (post-hoc evidence used when available; otherwise highest group median/mean)."
+  } else {
+    "Color indicates the group with the highest median relative abundance (mean used for ties); visualization only."
+  }
+
+  p <- ggplot2::ggplot(plot_data, ggplot2::aes(y = .data$axis_taxon)) +
+    ggplot2::geom_segment(ggplot2::aes(x = 0, xend = .data$effect_size, yend = .data$axis_taxon),
+                          linewidth = 0.7, color = "#D1D5DB") +
+    ggplot2::geom_point(ggplot2::aes(x = .data$effect_size, color = .data$enriched_group,
+                                    size = .data$neg_log10_fdr), alpha = 0.95) +
+    ggplot2::scale_color_manual(values = palette, name = "Enriched group") +
+    ggplot2::scale_size_continuous(range = c(3.2, 7.2), name = expression(-log[10](FDR))) +
+    ggplot2::scale_y_discrete(labels = function(x) parse(text = diff_taxon_axis_labels(x))) +
+    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0.01, if (isTRUE(show_fdr_labels)) 0.24 else 0.08))) +
+    ggplot2::coord_cartesian(clip = "off") +
+    ggplot2::labs(title = "Top differentially abundant taxa", subtitle = subtitle,
+                  x = x_title, y = NULL, caption = method_note) +
+    ggplot2::theme_minimal(base_size = 11, base_family = "sans") +
+    ggplot2::theme(
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.grid.major.x = ggplot2::element_line(color = "#E5E7EB", linewidth = 0.35),
+      panel.grid.major.y = ggplot2::element_blank(), panel.grid.minor = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_text(size = 9, color = "#1F2937", lineheight = 0.95),
+      axis.text.x = ggplot2::element_text(color = "#374151"),
+      plot.title = ggplot2::element_text(size = 13, face = "bold", color = "#111827"),
+      plot.subtitle = ggplot2::element_text(size = 10, color = "#4B5563"),
+      plot.caption = ggplot2::element_text(size = 8.5, color = "#6B7280", hjust = 0),
+      legend.position = "top", legend.justification = "left",
+      plot.margin = ggplot2::margin(10, if (isTRUE(show_fdr_labels)) 70 else 20, 12, 12)
+    )
+  if (isTRUE(show_fdr_labels)) {
+    p <- p + ggplot2::geom_text(ggplot2::aes(x = .data$effect_size, label = .data$fdr_label),
+                                hjust = -0.18, size = 3, color = "#374151", show.legend = FALSE)
+  }
+  p
+}
+
+prepare_diff_balanced_data <- function(diff_table, group_levels = NULL,
+                                       top_n = 10, show_unclassified = FALSE,
+                                       fdr_cutoff = 0.05) {
+  if (!is.data.frame(diff_table)) stop("prepare_diff_balanced_data(): diff_table must be a data.frame.", call. = FALSE)
+  top_n <- as.integer(top_n)
+  if (length(top_n) != 1 || is.na(top_n) || top_n < 1) stop("prepare_diff_balanced_data(): top_n must be >= 1.", call. = FALSE)
+  df <- normalize_diff_result_columns(diff_table)
+  if (!"enriched_group" %in% names(df)) df$enriched_group <- "Undetermined"
+  df$display_taxon <- clean_diff_taxon_name(df$display_taxon)
+  keep <- is.finite(df$fdr) & df$fdr < fdr_cutoff & is.finite(df$effect_size) &
+    !is.na(df$enriched_group) & nzchar(as.character(df$enriched_group)) & df$enriched_group != "Undetermined"
+  df <- df[keep, , drop = FALSE]
+  if (!isTRUE(show_unclassified)) df <- df[!is_completely_unclassified_taxon(df$display_taxon), , drop = FALSE]
+  if (!nrow(df)) return(df)
+
+  available <- unique(as.character(df$enriched_group))
+  groups <- if (is.null(group_levels)) available else intersect(as.character(group_levels), available)
+  groups <- c(groups, setdiff(available, groups))
+  quota <- max(1L, floor(top_n / length(groups)))
+  df$.row_id <- seq_len(nrow(df))
+  df <- df[order(-abs(df$effect_size), df$fdr, na.last = TRUE), , drop = FALSE]
+  selected_ids <- unlist(lapply(groups, function(g) {
+    utils::head(df$.row_id[df$enriched_group == g], quota)
+  }), use.names = FALSE)
+  remaining <- max(0L, top_n - length(selected_ids))
+  if (remaining > 0) {
+    selected_ids <- c(selected_ids, utils::head(df$.row_id[!df$.row_id %in% selected_ids], remaining))
+  }
+  out <- df[df$.row_id %in% selected_ids, , drop = FALSE]
+  out <- out[order(match(out$enriched_group, groups), -abs(out$effect_size), out$fdr), , drop = FALSE]
+  out$q_label <- format_diff_q_value(out$fdr)
+  if (!"significance_stars" %in% names(out)) {
+    out$significance_stars <- ifelse(out$fdr < 0.001, "***", ifelse(out$fdr < 0.01, "**", ifelse(out$fdr < 0.05, "*", "ns")))
+  }
+  out$axis_taxon <- make.unique(stringr::str_wrap(out$display_taxon, width = 34), sep = " ")
+  out$axis_taxon <- factor(out$axis_taxon, levels = rev(out$axis_taxon))
+  out$enriched_group <- factor(out$enriched_group, levels = groups)
+  out$.row_id <- NULL
+  rownames(out) <- NULL
+  attr(out, "groups") <- groups
+  out
+}
+
+build_diff_balanced_plot <- function(plot_data, show_fdr = FALSE,
+                                     show_significance = TRUE) {
+  if (!is.data.frame(plot_data) || !nrow(plot_data)) {
+    return(build_diff_directional_plot(structure(plot_data, empty_message = "No significant taxa were available for the group-balanced plot.")))
+  }
+  groups <- attr(plot_data, "groups") %||% levels(plot_data$enriched_group)
+  colorblind_base <- c("#0072B2", "#E69F00", "#009E73", "#CC79A7", "#D55E00", "#56B4E9", "#F0E442", "#000000")
+  colors <- if (length(groups) <= length(colorblind_base)) colorblind_base[seq_along(groups)] else grDevices::colorRampPalette(colorblind_base)(length(groups))
+  palette <- stats::setNames(colors, groups)
+  label <- if (isTRUE(show_fdr)) plot_data$q_label else rep("", nrow(plot_data))
+  if (isTRUE(show_significance)) label <- trimws(paste(label, plot_data$significance_stars))
+  plot_data$plot_label <- label
+  metric <- unique(as.character(plot_data$effect_size_metric))
+  metric <- metric[!is.na(metric) & nzchar(metric)]
+  metric_label <- if (any(grepl("epsilon", metric, ignore.case = TRUE))) "Kruskal-Wallis epsilon-squared" else if (length(metric)) metric[[1]] else "Effect size"
+  right_expand <- if (isTRUE(show_fdr)) 0.32 else 0.14
+
+  ggplot2::ggplot(plot_data, ggplot2::aes(x = abs(.data$effect_size), y = .data$axis_taxon)) +
+    ggplot2::geom_point(ggplot2::aes(color = .data$enriched_group), size = 4.2, alpha = 0.95) +
+    ggplot2::geom_text(ggplot2::aes(label = .data$plot_label), hjust = -0.35, size = 3.1,
+                       color = "#374151", show.legend = FALSE) +
+    ggplot2::facet_grid(rows = ggplot2::vars(enriched_group), scales = "free_y", space = "free_y") +
+    ggplot2::scale_color_manual(values = palette, name = "Enriched group", drop = FALSE) +
+    ggplot2::scale_y_discrete(labels = function(x) parse(text = diff_taxon_axis_labels(x))) +
+    ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0.03, right_expand))) +
+    ggplot2::coord_cartesian(clip = "off") +
+    ggplot2::labs(
+      title = paste0("Differentially abundant taxa across ", paste(groups, collapse = ", ")),
+      subtitle = paste0("Group-balanced selection ranked by ", metric_label),
+      x = metric_label, y = NULL
+    ) +
+    ggplot2::theme_classic(base_size = 12, base_family = "sans") +
+    ggplot2::theme(
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.grid.major.x = ggplot2::element_line(color = "#E5E7EB", linewidth = 0.35),
+      panel.grid.major.y = ggplot2::element_blank(), panel.grid.minor = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_text(size = 9.5, color = "#1F2937", lineheight = 0.95),
+      strip.background = ggplot2::element_rect(fill = "#F3F4F6", color = "#D1D5DB"),
+      strip.text.y = ggplot2::element_text(angle = 0, face = "bold", color = "#374151"),
+      plot.title = ggplot2::element_text(size = 14, face = "bold", hjust = 0),
+      plot.subtitle = ggplot2::element_text(size = 10.5, color = "#4B5563"),
+      legend.position = "top", legend.justification = "left",
+      plot.margin = ggplot2::margin(12, 55, 12, 20)
+    )
+}
+
+prepare_diff_heatmap_data <- function(diff_table, group_summary, group_levels = NULL,
+                                      top_n = 10, show_unclassified = FALSE) {
+  if (!is.data.frame(group_summary) || !all(c("taxon", "group") %in% names(group_summary))) return(data.frame())
+  selected <- prepare_diff_balanced_data(
+    diff_table, group_levels = group_levels, top_n = top_n,
+    show_unclassified = show_unclassified
+  )
+  if (!nrow(selected)) return(data.frame())
+  value_col <- if ("median_abundance" %in% names(group_summary)) "median_abundance" else if ("mean_abundance" %in% names(group_summary)) "mean_abundance" else NULL
+  if (is.null(value_col)) return(data.frame())
+  gs <- group_summary[group_summary$taxon %in% selected$taxon, c("taxon", "group", value_col), drop = FALSE]
+  names(gs)[[3]] <- "relative_abundance"
+  gs$relative_abundance <- suppressWarnings(as.numeric(gs$relative_abundance))
+  labels <- data.frame(taxon = selected$taxon, axis_taxon = as.character(selected$axis_taxon), stringsAsFactors = FALSE)
+  gs <- merge(gs, labels, by = "taxon", all.x = TRUE, sort = FALSE)
+  gs$row_z <- ave(gs$relative_abundance, gs$taxon, FUN = function(x) {
+    if (sum(is.finite(x)) < 2 || !is.finite(stats::sd(x, na.rm = TRUE)) || stats::sd(x, na.rm = TRUE) == 0) return(rep(0, length(x)))
+    as.numeric(scale(x))
+  })
+  groups <- if (is.null(group_levels)) unique(as.character(gs$group)) else as.character(group_levels)
+  gs$group <- factor(gs$group, levels = groups)
+  taxa_order <- rev(unique(as.character(selected$axis_taxon)))
+  gs$axis_taxon <- factor(gs$axis_taxon, levels = taxa_order)
+  attr(gs, "value_label") <- if (identical(value_col, "median_abundance")) "group median relative abundance" else "group mean relative abundance"
+  gs
+}
+
+build_diff_heatmap_plot <- function(heatmap_data) {
+  if (!is.data.frame(heatmap_data) || !nrow(heatmap_data)) {
+    return(build_diff_directional_plot(structure(heatmap_data, empty_message = "No group abundance summary was available for the heatmap.")))
+  }
+  value_label <- attr(heatmap_data, "value_label") %||% "group relative abundance"
+  ggplot2::ggplot(heatmap_data, ggplot2::aes(x = .data$group, y = .data$axis_taxon, fill = .data$row_z)) +
+    ggplot2::geom_tile(color = "white", linewidth = 0.5) +
+    ggplot2::scale_fill_gradient2(low = "#2166AC", mid = "#F7F7F7", high = "#B2182B", midpoint = 0,
+                                  name = "Row z-score") +
+    ggplot2::scale_y_discrete(labels = function(x) parse(text = diff_taxon_axis_labels(x))) +
+    ggplot2::labs(
+      title = "Differential taxa abundance patterns across groups",
+      subtitle = paste0("Row z-scores of ", value_label),
+      x = NULL, y = NULL
+    ) +
+    ggplot2::theme_minimal(base_size = 12, base_family = "sans") +
+    ggplot2::theme(
+      plot.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.background = ggplot2::element_rect(fill = "white", color = NA),
+      panel.grid = ggplot2::element_blank(),
+      axis.text.x = ggplot2::element_text(angle = 25, hjust = 1, color = "#1F2937"),
+      axis.text.y = ggplot2::element_text(size = 9.5, color = "#1F2937"),
+      plot.title = ggplot2::element_text(size = 14, face = "bold", hjust = 0),
+      plot.subtitle = ggplot2::element_text(size = 10, color = "#4B5563"),
+      legend.position = "top", plot.margin = ggplot2::margin(12, 20, 12, 20)
+    )
+}
+
+run_diff_analysis <- function(dataset, group_var, tax_level, job_dir,
+                              min_prevalence = 0.10, fdr_cutoff = 0.05,
+                              top_n = 15) {
   if (is.null(dataset)) stop("run_diff_analysis(): dataset is NULL.", call. = FALSE)
   assert_non_empty_string(group_var, "group_var")
   assert_non_empty_string(tax_level, "tax_level")
   assert_non_empty_string(job_dir, "job_dir")
   if (!dir.exists(job_dir)) stop("run_diff_analysis(): job_dir not found: ", job_dir, call. = FALSE)
-
-  samp <- dataset$sample_table
-  if (!group_var %in% names(samp)) stop("run_diff_analysis(): group_var not found in sample_table: ", group_var, call. = FALSE)
-
-  # Aggregate abundance at the requested taxonomic level.
-  dataset$cal_abund()
-  if (!tax_level %in% names(dataset$taxa_abund)) {
-    stop("run_diff_analysis(): tax_level '", tax_level, "' not available. Choose from: ",
-         paste(names(dataset$taxa_abund), collapse = ", "), call. = FALSE)
+  if (!is.numeric(min_prevalence) || length(min_prevalence) != 1 || min_prevalence < 0 || min_prevalence > 1) {
+    stop("run_diff_analysis(): min_prevalence must be between 0 and 1.", call. = FALSE)
   }
-  abund <- as.data.frame(dataset$taxa_abund[[tax_level]])
 
-  groups <- as.factor(samp[[group_var]])
-  names(groups) <- rownames(samp)
+  prepared <- prepare_diff_abundance(dataset, tax_level)
+  sanitized <- sanitize_diff_inputs(prepared$abundance, dataset$sample_table, group_var)
+  abund <- sanitized$abund
+  samp <- sanitized$samp
+  groups <- samp[[group_var]]
   glev <- levels(groups)
-  if (length(glev) < 2) stop("run_diff_analysis(): need >= 2 groups, got ", length(glev), call. = FALSE)
+  group_n <- table(groups)
+  if (length(glev) < 2) stop("run_diff_analysis(): at least two groups are required.", call. = FALSE)
+  if (any(group_n < 2)) stop("run_diff_analysis(): each group must contain at least two samples.", call. = FALSE)
 
-  # For each taxon, run test and compute log2FC.
-  taxa_names <- rownames(abund)
+  taxa <- rownames(abund)
+  labels <- unname(prepared$labels[taxa])
   results <- data.frame(
-    taxon = taxa_names,
-    tax_level = tax_level,
-    p_value = NA_real_,
-    log2fc = NA_real_,
-    mean_abundance = NA_real_,
-    prevalence = NA_real_,
+    taxon = taxa, taxon_label = labels, display_taxon = labels,
+    tax_level = tax_level, test_method = if (length(glev) == 2) "Wilcoxon rank-sum" else "Kruskal-Wallis",
+    n_total = ncol(abund), n_groups = length(glev), prevalence = NA_real_, mean_abundance = NA_real_,
+    p_value = NA_real_, fdr = NA_real_, significant = FALSE, log2fc = NA_real_,
+    effect_size = NA_real_, effect_size_metric = if (length(glev) == 2) "Cliff's delta" else "epsilon-squared",
+    effect_magnitude = NA_character_, tested = FALSE, exclusion_reason = NA_character_,
     stringsAsFactors = FALSE
   )
+  group_summary <- vector("list", length(taxa))
+  pairwise <- list()
+  positive <- as.numeric(as.matrix(abund))
+  positive <- positive[is.finite(positive) & positive > 0]
+  pseudocount <- if (length(positive)) min(positive) / 2 else 1e-06
 
-  sample_ids <- colnames(abund)
-  for (i in seq_along(taxa_names)) {
+  for (i in seq_along(taxa)) {
     vals <- as.numeric(abund[i, ])
-    names(vals) <- sample_ids
-
-    # Split by group
-    grp_vals <- split(vals, groups[names(vals)])
-
+    results$prevalence[i] <- mean(vals > 0, na.rm = TRUE)
     results$mean_abundance[i] <- mean(vals, na.rm = TRUE)
-    results$prevalence[i] <- sum(vals > 0, na.rm = TRUE) / length(vals)
+    summaries <- lapply(glev, function(g) {
+      x <- vals[groups == g]
+      data.frame(taxon = taxa[i], taxon_label = labels[i], tax_level = tax_level,
+                 group = g, n = length(x), mean_abundance = mean(x), median_abundance = stats::median(x),
+                 q1 = unname(stats::quantile(x, 0.25)), q3 = unname(stats::quantile(x, 0.75)),
+                 prevalence = mean(x > 0), stringsAsFactors = FALSE)
+    })
+    group_summary[[i]] <- do.call(rbind, summaries)
 
+    if (results$prevalence[i] < min_prevalence) {
+      results$exclusion_reason[i] <- "prevalence_below_threshold"
+      next
+    }
+    if (length(unique(vals[is.finite(vals)])) < 2) {
+      results$exclusion_reason[i] <- "zero_variance"
+      next
+    }
+    results$tested[i] <- TRUE
+    split_vals <- split(vals, groups)
     if (length(glev) == 2) {
-      g1 <- grp_vals[[glev[1]]]
-      g2 <- grp_vals[[glev[2]]]
-      if (length(g1) < 2 || length(g2) < 2) next
-      results$p_value[i] <- tryCatch(
-        stats::wilcox.test(g1, g2, exact = FALSE)$p.value,
-        error = function(e) NA_real_
-      )
-      m1 <- mean(g1, na.rm = TRUE)
-      m2 <- mean(g2, na.rm = TRUE)
-      results$log2fc[i] <- if (m1 > 0 && m2 > 0) log2(m2 / m1) else NA_real_
+      g1 <- split_vals[[glev[1]]]; g2 <- split_vals[[glev[2]]]
+      results$p_value[i] <- tryCatch(suppressWarnings(stats::wilcox.test(g1, g2, exact = FALSE)$p.value), error = function(e) NA_real_)
+      results$log2fc[i] <- log2((mean(g2) + pseudocount) / (mean(g1) + pseudocount))
+      results$effect_size[i] <- cliffs_delta(g1, g2)
+      results$effect_magnitude[i] <- cliffs_magnitude(results$effect_size[i])
     } else {
-      grp_list <- lapply(grp_vals, function(x) if (length(x) >= 2) x else numeric(0))
-      grp_list <- Filter(function(x) length(x) >= 2, grp_list)
-      if (length(grp_list) < 2) next
-      results$p_value[i] <- tryCatch(
-        stats::kruskal.test(vals ~ groups[names(vals)])$p.value,
-        error = function(e) NA_real_
-      )
-      results$log2fc[i] <- NA_real_
+      kw <- tryCatch(suppressWarnings(stats::kruskal.test(vals, groups)), error = function(e) NULL)
+      if (!is.null(kw)) {
+        results$p_value[i] <- kw$p.value
+        results$effect_size[i] <- kruskal_epsilon_squared(kw$statistic, length(vals), length(glev))
+        results$effect_magnitude[i] <- if (results$effect_size[i] < 0.01) "negligible" else if (results$effect_size[i] < 0.06) "small" else if (results$effect_size[i] < 0.14) "medium" else "large"
+      }
     }
   }
 
-  results <- results[!is.na(results$p_value), , drop = FALSE]
-  results$fdr <- stats::p.adjust(results$p_value, method = "fdr")
-  results$significant <- results$fdr < 0.05
-  results$display_taxon <- clean_taxon_label(results$taxon)
-  results <- results[order(results$fdr), ]
-  rownames(results) <- NULL
+  tested <- which(results$tested & !is.na(results$p_value))
+  results$fdr[tested] <- stats::p.adjust(results$p_value[tested], method = "BH")
+  results$significant <- !is.na(results$fdr) & results$fdr < fdr_cutoff
+  results$direction <- derive_diff_direction(results$log2fc, glev)
+  results$significance <- derive_diff_significance(results$fdr)
 
-  out_csv <- file.path(job_dir, "tables", "differential_taxa.csv")
-  ensure_dir(dirname(out_csv))
-  readr::write_csv(results, out_csv)
-
-  # Always create a "significant-only" CSV (may be empty, but must keep columns)
-  sig_csv <- file.path(job_dir, "tables", "differential_taxa_significant.csv")
-  ensure_dir(dirname(sig_csv))
-  sig <- results[isTRUE(results$significant), , drop = FALSE]
-  if (nrow(sig) == 0) {
-    # Empty table with full column set
-    sig <- results[0, , drop = FALSE]
+  if (length(glev) > 2 && any(results$significant)) {
+    for (i in which(results$significant)) {
+      vals <- as.numeric(abund[i, ])
+      pw <- utils::combn(glev, 2, simplify = FALSE)
+      pw_rows <- lapply(pw, function(z) {
+        x <- vals[groups == z[1]]; y <- vals[groups == z[2]]
+        data.frame(taxon = taxa[i], taxon_label = labels[i], group_1 = z[1], group_2 = z[2],
+                   p_value = suppressWarnings(stats::wilcox.test(x, y, exact = FALSE)$p.value),
+                   cliffs_delta = cliffs_delta(x, y), stringsAsFactors = FALSE)
+      })
+      pw_df <- do.call(rbind, pw_rows)
+      pw_df$p_adjust_holm <- stats::p.adjust(pw_df$p_value, method = "holm")
+      pairwise[[length(pairwise) + 1L]] <- pw_df
+    }
   }
-  readr::write_csv(sig, sig_csv)
 
-  # Volcano plot (always)
-  volcano_paths <- plot_diff_volcano(results, group_var, job_dir)
+  results <- results[order(is.na(results$fdr), results$fdr, results$p_value, -abs(results$effect_size)), , drop = FALSE]
+  rownames(results) <- NULL
+  group_summary <- do.call(rbind, group_summary)
+  pairwise <- if (length(pairwise)) do.call(rbind, pairwise) else data.frame(
+    taxon = character(), taxon_label = character(), group_1 = character(), group_2 = character(),
+    p_value = numeric(), cliffs_delta = numeric(), p_adjust_holm = numeric(), stringsAsFactors = FALSE)
 
-  # Barplot: significant taxa if available; otherwise exploratory top by raw p-value
-  exploratory <- nrow(results) == 0 || !any(results$significant)
-  barplot_paths <- plot_diff_taxa_barplot(
-    diff_table = results,
-    group_var = group_var,
-    job_dir = job_dir,
-    exploratory = exploratory
+  enrichment <- derive_enriched_groups(results, group_summary, pairwise)
+  results$enriched_group <- enrichment$enriched_group
+  results$enriched_group_method <- enrichment$enriched_group_method
+  results$display_taxon <- clean_diff_taxon_name(results$taxon_label)
+  results <- add_directional_effect_columns(results, glev)
+
+  table_dir <- file.path(job_dir, "tables")
+  ensure_dir(table_dir)
+  out_csv <- file.path(table_dir, "differential_taxa.csv")
+  sig_csv <- file.path(table_dir, "differential_taxa_significant.csv")
+  group_csv <- file.path(table_dir, "differential_taxa_group_summary.csv")
+  pairwise_csv <- file.path(table_dir, "differential_taxa_pairwise.csv")
+  write_csv_utf8(sanitize_strings_for_output(results), out_csv, na = "")
+  write_csv_utf8(sanitize_strings_for_output(results[results$significant, , drop = FALSE]), sig_csv, na = "")
+  write_csv_utf8(sanitize_strings_for_output(group_summary), group_csv, na = "")
+  write_csv_utf8(sanitize_strings_for_output(pairwise), pairwise_csv, na = "")
+
+  volcano_paths <- plot_diff_volcano(results, group_var, job_dir, group_levels = glev, fdr_cutoff = fdr_cutoff)
+  barplot_paths <- plot_diff_taxa_bar(results, group_var, job_dir,
+                                     exploratory = !any(results$significant), top_n = top_n)
+  directional_paths <- plot_diff_abundance_forest(
+    results, group_var, job_dir, group_levels = glev,
+    top_n = min(top_n, 10L), show_fdr = FALSE, show_significance = TRUE
   )
-
-  # Summary JSON (always)
-  summary_path <- save_diff_summary_json(
-    diff_table = results,
-    group_var = group_var,
-    tax_level = tax_level,
-    job_dir = job_dir
+  balanced_paths <- plot_diff_balanced_effect(
+    results, group_var, job_dir, group_levels = glev,
+    top_n = min(top_n, 10L), show_fdr = FALSE, show_significance = TRUE
   )
-
+  heatmap_paths <- plot_diff_group_heatmap(
+    results, group_summary, group_var, job_dir,
+    group_levels = glev, top_n = min(top_n, 10L)
+  )
+  summary_path <- save_diff_summary_json(results, group_var, tax_level, job_dir,
+                                         min_prevalence = min_prevalence,
+                                         group_sizes = as.list(as.integer(group_n)),
+                                         group_names = names(group_n))
   list(
     diff_table_path = normalizePath(out_csv, winslash = "/", mustWork = TRUE),
     significant_table_path = normalizePath(sig_csv, winslash = "/", mustWork = TRUE),
+    group_summary_path = normalizePath(group_csv, winslash = "/", mustWork = TRUE),
+    pairwise_table_path = normalizePath(pairwise_csv, winslash = "/", mustWork = TRUE),
     diff_summary_path = summary_path,
     figure_paths = list(
-      volcano = volcano_paths,
-      barplot = barplot_paths
+      volcano = volcano_paths, barplot = barplot_paths,
+      directional = directional_paths, balanced = balanced_paths,
+      heatmap = heatmap_paths
     ),
     diff_table = results
   )
 }
 
-plot_diff_volcano <- function(diff_table, group_var, job_dir) {
+plot_diff_volcano <- function(diff_table, group_var, job_dir, group_levels = NULL, fdr_cutoff = 0.05, label_n = 10) {
   if (!is.data.frame(diff_table)) stop("plot_diff_volcano(): diff_table must be a data.frame.", call. = FALSE)
-  assert_non_empty_string(group_var, "group_var")
-  assert_non_empty_string(job_dir, "job_dir")
-
-  df <- diff_table
-
-  p <- ggplot2::ggplot(df, ggplot2::aes(x = .data$log2fc, y = -log10(pmax(.data$fdr, 1e-300))))
-
-  if (nrow(df) > 0 && any(df$significant)) {
-    p <- p + ggplot2::geom_point(ggplot2::aes(color = .data$significant), alpha = 0.7, size = 2) +
-      ggplot2::scale_color_manual(
-        values = c("TRUE" = "#E74C3C", "FALSE" = "#7F8C8D"),
-        labels = c("TRUE" = "FDR < 0.05", "FALSE" = "Not significant")
-      )
+  diff_table <- normalize_diff_result_columns(diff_table)
+  df <- diff_table[diff_table$tested & !is.na(diff_table$fdr), , drop = FALSE]
+  two_group <- any(is.finite(df$log2fc))
+  if (nrow(df) == 0) {
+    p <- ggplot2::ggplot() + ggplot2::geom_blank() + ggplot2::labs(title = "Differential abundance", subtitle = "No taxa passed the analysis filter")
+  } else if (two_group) {
+    df$plot_fdr <- pmax(df$fdr, 1e-300)
+    df$status <- ifelse(df$significant, df$direction, "Not significant")
+    label_df <- utils::head(df[df$significant, , drop = FALSE], label_n)
+    significant_directions <- unique(df$direction[df$significant])
+    direction_colors <- setNames(rep(c("#2C7FB8", "#D95F0E"), length.out = length(significant_directions)), significant_directions)
+    status_colors <- c("Not significant" = "#B8C0CC", direction_colors)
+    p <- ggplot2::ggplot(df, ggplot2::aes(.data$log2fc, -log10(.data$plot_fdr), color = .data$status)) +
+      ggplot2::geom_point(alpha = 0.75, size = 2.2) +
+      ggplot2::geom_hline(yintercept = -log10(fdr_cutoff), linetype = 2, color = "#6B7280") +
+      ggplot2::geom_vline(xintercept = 0, linetype = 3, color = "#9CA3AF") +
+      ggrepel::geom_text_repel(data = label_df, ggplot2::aes(label = .data$taxon_label), size = 3, max.overlaps = Inf, show.legend = FALSE) +
+      ggplot2::scale_color_manual(values = status_colors) +
+      ggplot2::labs(title = "Differential abundance", subtitle = paste0("BH-FDR < ", fdr_cutoff, "; labels show the top significant taxa"),
+                    x = paste0("log2 fold change (", group_levels[2], " / ", group_levels[1], ")"), y = expression(-log[10](BH-FDR)), color = NULL)
   } else {
-    p <- p + ggplot2::geom_point(alpha = 0.7, size = 2, color = "#7F8C8D")
+    df <- utils::head(df[order(df$fdr), , drop = FALSE], 30)
+    df$taxon_label <- make.unique(df$taxon_label)
+    p <- ggplot2::ggplot(df, ggplot2::aes(stats::reorder(.data$taxon_label, .data$effect_size), .data$effect_size,
+                                          color = .data$significant, size = -log10(pmax(.data$fdr, 1e-300)))) +
+      ggplot2::geom_point() + ggplot2::coord_flip() +
+      ggplot2::scale_color_manual(values = c("TRUE" = "#D95F0E", "FALSE" = "#B8C0CC")) +
+      ggplot2::labs(title = "Multi-group differential abundance", subtitle = "Top 30 taxa by BH-FDR",
+                    x = NULL, y = "Kruskal-Wallis epsilon-squared", color = paste0("BH-FDR < ", fdr_cutoff), size = expression(-log[10](BH-FDR)))
   }
+  p <- p + get_report_plot_theme(11) + ggplot2::theme(legend.position = "right")
+  save_plot_pdf_png(p, file.path(job_dir, "figures", "diff_volcano.pdf"), file.path(job_dir, "figures", "diff_volcano.png"), width = 9, height = 6.5)
+}
 
-  p <- p +
-    ggplot2::geom_hline(yintercept = -log10(0.05), linetype = "dashed", alpha = 0.5) +
-    ggplot2::geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
-    ggplot2::labs(
-      title = "Differential abundance (volcano plot)",
-      x = "log2 Fold Change",
-      y = "-log10(FDR)",
-      color = NULL
-    ) +
-    ggplot2::theme_minimal(base_size = 12)
+plot_diff_taxa_bar <- function(diff_table, group_var, job_dir, exploratory = FALSE, top_n = 15) {
+  if (!is.data.frame(diff_table)) stop("plot_diff_taxa_bar(): diff_table must be a data.frame.", call. = FALSE)
+  sel <- prepare_diff_lollipop_data(diff_table, top_n = top_n, show_unclassified = FALSE, sort_by = "effect_size")
+  p <- build_diff_lollipop_plot(sel, show_fdr_labels = FALSE, sort_by = "effect_size")
+  height <- max(6, min(10, 2.5 + 0.32 * nrow(sel)))
+  save_plot_pdf_png(p, file.path(job_dir, "figures", "diff_taxa_barplot.pdf"), file.path(job_dir, "figures", "diff_taxa_barplot.png"), width = 9, height = height)
+}
 
-  fig_pdf <- file.path(job_dir, "figures", "diff_volcano.pdf")
-  fig_png <- file.path(job_dir, "figures", "diff_volcano.png")
-  save_plot_pdf_png(p, fig_pdf, fig_png)
+plot_diff_taxa_barplot <- function(diff_table, group_var, job_dir, exploratory = FALSE, top_n = 15) {
+  plot_diff_taxa_bar(diff_table, group_var, job_dir, exploratory, top_n)
+}
+
+plot_diff_abundance_forest <- function(diff_table, group_var, job_dir,
+                                       group_levels = NULL, top_n = 10,
+                                       show_fdr = FALSE, show_significance = TRUE) {
+  if (!is.data.frame(diff_table)) stop("plot_diff_abundance_forest(): diff_table must be a data.frame.", call. = FALSE)
+  plot_data <- suppressWarnings(prepare_diff_directional_data(
+    diff_table, group_levels = group_levels, top_n = top_n,
+    show_unclassified = FALSE
+  ))
+  p <- build_diff_directional_plot(plot_data, show_fdr = show_fdr,
+                                   show_significance = show_significance)
+  height <- max(5.5, min(9, 2.7 + 0.38 * nrow(plot_data)))
+  save_plot_pdf_png(
+    p,
+    file.path(job_dir, "figures", "diff_taxa_directional.pdf"),
+    file.path(job_dir, "figures", "diff_taxa_directional.png"),
+    width = 9, height = height, dpi = 300
+  )
+}
+
+plot_diff_balanced_effect <- function(diff_table, group_var, job_dir,
+                                      group_levels = NULL, top_n = 10,
+                                      show_fdr = FALSE, show_significance = TRUE) {
+  if (!is.data.frame(diff_table)) stop("plot_diff_balanced_effect(): diff_table must be a data.frame.", call. = FALSE)
+  plot_data <- prepare_diff_balanced_data(
+    diff_table, group_levels = group_levels, top_n = top_n,
+    show_unclassified = FALSE
+  )
+  p <- build_diff_balanced_plot(plot_data, show_fdr = show_fdr,
+                                show_significance = show_significance)
+  height <- max(6, min(11, 3.2 + 0.45 * nrow(plot_data)))
+  save_plot_pdf_png(
+    p,
+    file.path(job_dir, "figures", "diff_taxa_balanced.pdf"),
+    file.path(job_dir, "figures", "diff_taxa_balanced.png"),
+    width = 9, height = height, dpi = 300
+  )
+}
+
+plot_diff_group_heatmap <- function(diff_table, group_summary, group_var, job_dir,
+                                    group_levels = NULL, top_n = 10) {
+  if (!is.data.frame(diff_table)) stop("plot_diff_group_heatmap(): diff_table must be a data.frame.", call. = FALSE)
+  plot_data <- prepare_diff_heatmap_data(
+    diff_table, group_summary, group_levels = group_levels,
+    top_n = top_n, show_unclassified = FALSE
+  )
+  p <- build_diff_heatmap_plot(plot_data)
+  height <- max(5.5, min(10, 2.8 + 0.38 * length(unique(plot_data$taxon))))
+  save_plot_pdf_png(
+    p,
+    file.path(job_dir, "figures", "diff_taxa_heatmap.pdf"),
+    file.path(job_dir, "figures", "diff_taxa_heatmap.png"),
+    width = 8.5, height = height, dpi = 300
+  )
 }
 
 summarize_diff_for_ai <- function(diff_table, group_var) {
-  if (!is.data.frame(diff_table)) stop("summarize_diff_for_ai(): diff_table must be a data.frame.", call. = FALSE)
-  assert_non_empty_string(group_var, "group_var")
-
-  sig <- diff_table[diff_table$significant, , drop = FALSE]
-  list(
-    analysis_type = "differential_abundance",
-    group_variable = group_var,
-    n_tested = nrow(diff_table),
-    n_significant = nrow(sig),
-    top_taxa = head(sig, 20)[, c("taxon", "tax_level", "p_value", "fdr", "log2fc", "mean_abundance")],
-    method = if (any(!is.na(diff_table$log2fc))) "wilcoxon" else "kruskal-wallis"
-  )
+  diff_table <- normalize_diff_result_columns(diff_table)
+  sig <- diff_table[!is.na(diff_table$significant) & diff_table$significant, , drop = FALSE]
+  exploratory <- diff_table[diff_table$tested & !diff_table$significant, , drop = FALSE]
+  sig_top <- prepare_diff_taxa_for_ai(sig, max_n = 10, drop_unclassified = FALSE, keep_single_unclassified = TRUE)
+  exploratory_top <- prepare_diff_taxa_for_ai(exploratory[order(exploratory$fdr), , drop = FALSE], max_n = 5, drop_unclassified = TRUE, keep_single_unclassified = TRUE)
+  cols <- c("taxon", "taxon_label", "tax_level", "p_value", "fdr", "log2fc", "effect_size", "effect_size_metric", "effect_magnitude", "direction", "significance", "mean_abundance", "prevalence")
+  list(analysis_type = "differential_abundance", group_variable = group_var, n_tested = sum(diff_table$tested), n_significant = nrow(sig),
+       significant_taxa = sig_top[, intersect(cols, names(sig_top)), drop = FALSE],
+       exploratory_top_taxa = exploratory_top[, intersect(cols, names(exploratory_top)), drop = FALSE],
+       top_taxa = sig_top[, intersect(cols, names(sig_top)), drop = FALSE],
+       no_significant_message = paste("No FDR-significant taxa were detected.",
+                                      "The following taxa are exploratory trends only and should not be interpreted as statistically significant."),
+       caution_note = "Exploratory trends are hypothesis-generating and require experimental validation.",
+       method = unique(diff_table$test_method[diff_table$tested])[1])
 }
 
-plot_diff_taxa_barplot <- function(diff_table, group_var, job_dir, exploratory = FALSE, top_n = 20) {
-  if (!is.data.frame(diff_table)) stop("plot_diff_taxa_barplot(): diff_table must be a data.frame.", call. = FALSE)
-  assert_non_empty_string(group_var, "group_var")
-  assert_non_empty_string(job_dir, "job_dir")
-  if (!is.logical(exploratory) || length(exploratory) != 1) stop("plot_diff_taxa_barplot(): exploratory must be TRUE/FALSE.", call. = FALSE)
-  if (!is.numeric(top_n) || length(top_n) != 1 || is.na(top_n) || top_n < 1) stop("plot_diff_taxa_barplot(): top_n must be >= 1.", call. = FALSE)
-
-  df <- diff_table
-  if (nrow(df) == 0) {
-    # Create an empty placeholder plot (still saved)
-    p <- ggplot2::ggplot() +
-      ggplot2::geom_blank() +
-      ggplot2::labs(
-        title = "Differential taxa (barplot)",
-        subtitle = "No taxa available for plotting"
-      ) +
-      ggplot2::theme_minimal(base_size = 12)
-  } else {
-    if (exploratory) {
-      sel <- df[order(df$p_value), , drop = FALSE]
-      sel <- utils::head(sel, top_n)
-      subtitle <- "Exploratory: no FDR-significant taxa"
-    } else {
-      sel <- df[df$significant, , drop = FALSE]
-      sel <- sel[order(sel$fdr), , drop = FALSE]
-      sel <- utils::head(sel, top_n)
-      subtitle <- NULL
-    }
-
-    sel$neglog10_p <- -log10(pmax(sel$p_value, 1e-300))
-    sel$taxon <- factor(sel$taxon, levels = rev(sel$taxon))
-
-    p <- ggplot2::ggplot(sel, ggplot2::aes(x = taxon, y = neglog10_p, fill = significant)) +
-      ggplot2::geom_col() +
-      ggplot2::coord_flip() +
-      ggplot2::scale_fill_manual(values = c("TRUE" = "#E74C3C", "FALSE" = "#7F8C8D")) +
-      ggplot2::labs(
-        title = "Differential taxa (barplot)",
-        subtitle = subtitle,
-        x = NULL,
-        y = "-log10(raw p-value)",
-        fill = NULL
-      ) +
-      ggplot2::theme_minimal(base_size = 12)
-  }
-
-  fig_pdf <- file.path(job_dir, "figures", "diff_taxa_barplot.pdf")
-  fig_png <- file.path(job_dir, "figures", "diff_taxa_barplot.png")
-  save_plot_pdf_png(p, fig_pdf, fig_png)
-}
-
-save_diff_summary_json <- function(diff_table, group_var, tax_level, job_dir) {
-  if (!is.data.frame(diff_table)) stop("save_diff_summary_json(): diff_table must be a data.frame.", call. = FALSE)
-  assert_non_empty_string(group_var, "group_var")
-  assert_non_empty_string(tax_level, "tax_level")
-  assert_non_empty_string(job_dir, "job_dir")
-  if (!dir.exists(job_dir)) stop("save_diff_summary_json(): job_dir not found: ", job_dir, call. = FALSE)
-
-  sig <- diff_table[isTRUE(diff_table$significant), , drop = FALSE]
-  n_sig <- nrow(sig)
-
-  msg <- if (n_sig == 0) {
-    "No significant taxa were detected under FDR < 0.05."
-  } else {
-    "Significant taxa were detected under FDR < 0.05."
-  }
-
-  top <- sig
-  if (n_sig == 0 && nrow(diff_table) > 0) {
-    top <- diff_table[order(diff_table$p_value), , drop = FALSE]
-  }
-  top <- utils::head(top, 20)
-
-  # Keep JSON small and stable.
-  top_taxa <- if (nrow(top) == 0) {
-    list()
-  } else {
-    split(
-      top[, intersect(c("taxon", "tax_level", "p_value", "fdr", "log2fc", "mean_abundance", "prevalence"), names(top)), drop = FALSE],
-      seq_len(nrow(top))
-    )
-  }
-
+save_diff_summary_json <- function(diff_table, group_var, tax_level, job_dir,
+                                   min_prevalence = 0.10, group_sizes = NULL, group_names = NULL) {
+  diff_table <- normalize_diff_result_columns(diff_table)
+  sig <- diff_table[!is.na(diff_table$significant) & diff_table$significant, , drop = FALSE]
+  top <- if (nrow(sig)) sig else diff_table[diff_table$tested, , drop = FALSE]
+  top <- utils::head(top[order(top$fdr), , drop = FALSE], 20)
+  cols <- c("taxon", "taxon_label", "tax_level", "p_value", "fdr", "log2fc", "effect_size", "effect_size_metric", "effect_magnitude", "direction", "mean_abundance", "prevalence")
+  top_taxa <- if (!nrow(top)) list() else split(top[, intersect(cols, names(top)), drop = FALSE], seq_len(nrow(top)))
+  if (!is.null(group_sizes) && !is.null(group_names)) names(group_sizes) <- group_names
   summary <- list(
-    analysis_type = "differential_abundance",
-    group_variable = group_var,
-    tax_level = tax_level,
-    method = if (any(!is.na(diff_table$log2fc))) "wilcoxon" else "kruskal-wallis",
-    p_adjust_method = "fdr",
-    significance_cutoff = list(fdr = 0.05),
-    n_total_taxa = nrow(diff_table),
-    n_significant_taxa = n_sig,
-    top_taxa = top_taxa,
-    message = msg
+    analysis_type = "differential_abundance", group_variable = group_var, tax_level = tax_level,
+    method = unique(diff_table$test_method[diff_table$tested])[1], p_adjust_method = "Benjamini-Hochberg",
+    significance_cutoff = list(fdr = 0.05), filtering = list(min_prevalence = min_prevalence),
+    group_sizes = group_sizes, n_taxa_after_aggregation = nrow(diff_table), n_tested_taxa = sum(diff_table$tested),
+    n_filtered_taxa = sum(!diff_table$tested), n_significant_taxa = nrow(sig), top_taxa = top_taxa,
+    message = if (nrow(sig)) "Significant taxa were detected under FDR < 0.05." else "No significant taxa were detected under FDR < 0.05.",
+    interpretation_note = "Results are based on relative abundance, are univariate associations, and require compositional-aware confirmation for publication claims."
   )
-
-  out_path <- file.path(job_dir, "json", "diff_summary.json")
-  write_json_pretty(summary, out_path, auto_unbox = TRUE)
+  out <- file.path(job_dir, "json", "diff_summary.json")
+  write_json_pretty(summary, out, auto_unbox = TRUE)
 }

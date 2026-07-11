@@ -18,6 +18,13 @@
 .dashboard-page {
   display: grid;
   gap: 1rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.dashboard-page > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .hero-card {
@@ -111,20 +118,52 @@
   padding: 0.65rem 1rem !important;
 }
 
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable both-edges;
+}
+
 body {
   font-family: "IBM Plex Sans", "Segoe UI", Arial, sans-serif;
   background: var(--kkai-bg);
   color: var(--kkai-text);
+  min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  scrollbar-gutter: stable both-edges;
+}
+
+.bslib-page-navbar,
+.bslib-page-navbar > .container-fluid,
+.bslib-page-navbar .tab-content,
+.bslib-page-navbar .tab-pane {
+  width: 100%;
+  min-width: 0;
+}
+
+body.bslib-page-navbar {
+  overflow-y: scroll;
+  scrollbar-gutter: stable both-edges;
 }
 
 .bslib-page-navbar .tab-content {
-  max-width: min(var(--kkai-maxwidth), 100%);
+  max-width: var(--kkai-maxwidth);
   margin: 0 auto;
   padding: 0 1rem 1.5rem 1rem;
+  box-sizing: border-box;
 }
 
 .navbar {
   background: #0f172a !important;
+}
+
+.navbar > .container-fluid {
+  width: 100%;
+  max-width: var(--kkai-maxwidth);
+  margin: 0 auto;
+  padding-left: 1rem;
+  padding-right: 1rem;
+  box-sizing: border-box;
 }
 
 .navbar .navbar-brand,
@@ -422,8 +461,30 @@ body {
 
 .kkai-results-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
+  width: 100%;
+  justify-items: stretch;
+}
+
+.kkai-results-grid > .shiny-html-output {
+  width: 100%;
+  min-width: 0;
+}
+
+.kkai-results-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  max-width: 1040px;
+  justify-self: start;
+  min-width: 0;
+}
+
+.kkai-results-panel > .dashboard-card,
+.kkai-history-left > .dashboard-card,
+.kkai-history-right > .dashboard-card {
+  width: 100%;
 }
 
 .kkai-result-summary {
@@ -497,6 +558,11 @@ body {
   background: rgba(220, 38, 38, 0.08);
 }
 
+.kkai-alert--muted {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.08);
+}
+
 .kkai-badge {
   display: inline-flex;
   align-items: center;
@@ -527,11 +593,17 @@ body {
   border-color: rgba(220, 38, 38, 0.25);
 }
 
-.kkai-badge--skipped,
 .kkai-badge--warning {
   background: rgba(202, 138, 4, 0.14);
   color: var(--kkai-yellow);
   border-color: rgba(202, 138, 4, 0.28);
+}
+
+.kkai-badge--skipped,
+.kkai-badge--waiting {
+  color: var(--kkai-muted);
+  border-color: rgba(107, 114, 128, 0.20);
+  background: rgba(107, 114, 128, 0.10);
 }
 
 .kkai-badge--pending {
@@ -554,10 +626,17 @@ body {
   border: 1px solid var(--kkai-border);
   border-radius: 12px;
   background: #ffffff;
+  opacity: 1 !important;
 }
 
 .kkai-step-name {
   font-weight: 700;
+}
+
+.kkai-step-copy {
+  display: grid;
+  gap: 0.28rem;
+  min-width: 0;
 }
 
 .kkai-step-meta {
@@ -571,6 +650,209 @@ body {
 .kkai-step-detail {
   color: var(--kkai-muted);
   font-size: 0.92rem;
+  opacity: 1;
+}
+
+.kkai-inline-spinner {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-right: 0.35rem;
+  border-width: 0.13rem;
+}
+
+.kkai-workflow-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.05fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.kkai-workflow-summary-card,
+.kkai-workflow-steps-card {
+  min-height: 100%;
+  opacity: 1 !important;
+  pointer-events: auto;
+}
+
+.kkai-run-full-btn {
+  width: 100%;
+  margin-bottom: 0.95rem;
+}
+
+.kkai-run-full-btn:disabled,
+.kkai-run-full-btn.disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.kkai-workflow-layout .dashboard-card.disabled,
+.kkai-workflow-layout .dashboard-card[aria-disabled="true"],
+.kkai-workflow-layout .dashboard-card.is-disabled {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+.kkai-workflow-layout .dashboard-card.disabled .kkai-run-full-btn,
+.kkai-workflow-layout .dashboard-card[aria-disabled="true"] .kkai-run-full-btn,
+.kkai-workflow-layout .dashboard-card.is-disabled .kkai-run-full-btn {
+  pointer-events: none;
+}
+
+.kkai-workflow-summary {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.kkai-workflow-kv {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.kkai-workflow-kv span:first-child {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--kkai-muted);
+}
+
+.kkai-workflow-current-message {
+  color: var(--kkai-muted);
+  border-top: 1px solid var(--kkai-border);
+  padding-top: 0.7rem;
+}
+
+.kkai-run-result-card {
+  margin-top: 0.95rem;
+}
+
+.kkai-module-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.kkai-nav-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.42rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 0.9rem;
+  background: none;
+  cursor: pointer;
+}
+
+.kkai-nav-chip:hover {
+  text-decoration: none;
+  filter: brightness(0.98);
+}
+
+.kkai-nav-chip--active {
+  box-shadow: inset 0 0 0 2px rgba(15, 23, 42, 0.12);
+  transform: translateY(-1px);
+}
+
+.kkai-nav-chip--done {
+  background: rgba(22, 163, 74, 0.10);
+  border-color: rgba(22, 163, 74, 0.22);
+  color: var(--kkai-green);
+}
+
+.kkai-nav-chip--running {
+  background: rgba(37, 99, 235, 0.10);
+  border-color: rgba(37, 99, 235, 0.22);
+  color: var(--kkai-blue);
+}
+
+.kkai-nav-chip--warning {
+  background: rgba(202, 138, 4, 0.12);
+  border-color: rgba(202, 138, 4, 0.24);
+  color: var(--kkai-yellow);
+}
+
+.kkai-nav-chip--failed {
+  background: rgba(220, 38, 38, 0.10);
+  border-color: rgba(220, 38, 38, 0.22);
+  color: var(--kkai-red);
+}
+
+.kkai-nav-chip--waiting {
+  background: rgba(107, 114, 128, 0.08);
+  border-color: rgba(107, 114, 128, 0.18);
+  color: var(--kkai-muted);
+}
+
+.kkai-card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.kkai-result-card--placeholder {
+  opacity: 0.96;
+}
+
+.kkai-results-summary-bar {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--kkai-border);
+  border-radius: var(--kkai-radius);
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: var(--kkai-shadow);
+}
+
+.kkai-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.kkai-stat-card {
+  border: 1px solid var(--kkai-border);
+  border-radius: var(--kkai-radius);
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: var(--kkai-shadow);
+  padding: 0.95rem 1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.kkai-stat-label {
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--kkai-muted);
+}
+
+.kkai-stat-value {
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.kkai-stat-meta {
+  color: var(--kkai-muted);
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.kkai-report-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.kkai-history-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.shiny-notification-panel {
+  top: auto;
+  bottom: 1rem;
 }
 
 details {
@@ -597,17 +879,218 @@ details > summary {
   grid-template-columns: 1fr;
   gap: 1rem;
   align-items: start;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-anchor: none;
+}
+
+.kkai-grid-span-2 {
+  grid-column: 1 / -1;
 }
 
 @media (min-width: 992px) {
   .kkai-history-layout {
-    grid-template-columns: 65% 35%;
+    grid-template-columns: minmax(0, calc(100% - 446px)) 430px;
   }
 }
 
 .kkai-history-left,
 .kkai-history-right {
   min-width: 0;
+  width: 100%;
+}
+
+.kkai-history-right {
+  justify-self: stretch;
+}
+
+.kkai-history-left > .shiny-html-output,
+.kkai-history-right > .shiny-html-output {
+  width: 100%;
+  min-width: 0;
+}
+
+.kkai-history-list-card,
+.kkai-history-detail-card,
+.kkai-history-check-card {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.kkai-history-list-card {
+  overflow: hidden;
+}
+
+.kkai-history-list-card > .card-body {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+#job_history-jobs_table,
+#job_history-jobs_table .dataTables_wrapper {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+#job_history-jobs_table .dataTables_wrapper {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  overflow: visible;
+  padding-bottom: 0.4rem;
+}
+
+#job_history-jobs_table .dataTables_length {
+  grid-column: 1;
+}
+
+#job_history-jobs_table .dataTables_filter {
+  grid-column: 2;
+}
+
+#job_history-jobs_table .dataTables_scroll {
+  grid-column: 1 / -1;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+#job_history-jobs_table .dataTables_scrollBody {
+  overflow-x: auto !important;
+  scrollbar-gutter: stable;
+}
+
+#job_history-jobs_table table.dataTable {
+  min-width: 100%;
+}
+
+#job_history-jobs_table .dataTables_info,
+#job_history-jobs_table .dataTables_paginate {
+  position: sticky;
+  bottom: 0;
+  z-index: 8;
+  margin-top: 0.35rem;
+  padding: 0.45rem 0.65rem;
+  background: rgba(248, 250, 252, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  box-shadow: 0 -8px 18px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(6px);
+}
+
+#job_history-jobs_table .dataTables_info {
+  grid-column: 1;
+  border-radius: 12px 0 0 12px;
+  justify-self: start;
+}
+
+#job_history-jobs_table .dataTables_paginate {
+  grid-column: 2;
+  border-radius: 0 12px 12px 0;
+  justify-self: end;
+}
+
+#job_history-jobs_table .dataTables_paginate .paginate_button {
+  border-radius: 8px !important;
+  margin: 0 0.12rem !important;
+}
+
+#job_history-jobs_table .dataTables_paginate .paginate_button.current,
+#job_history-jobs_table .dataTables_paginate .paginate_button.current:hover {
+  background: #2563eb !important;
+  border-color: #2563eb !important;
+  color: #ffffff !important;
+}
+
+#job_history-jobs_table .dataTables_scrollBody::-webkit-scrollbar,
+#job_history-checks_table .dataTables_wrapper::-webkit-scrollbar {
+  height: 14px;
+}
+
+#job_history-jobs_table .dataTables_scrollBody::-webkit-scrollbar-track,
+#job_history-checks_table .dataTables_wrapper::-webkit-scrollbar-track {
+  background: #e5e7eb;
+  border-radius: 999px;
+}
+
+#job_history-jobs_table .dataTables_scrollBody::-webkit-scrollbar-thumb,
+#job_history-checks_table .dataTables_wrapper::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border: 3px solid #e5e7eb;
+  border-radius: 999px;
+}
+
+#job_history-job_detail .kkai-history-detail-card {
+  animation: kkai-history-detail-in 180ms ease-out both;
+  transform-origin: top right;
+}
+
+#job_history-job_detail.kkai-history-detail-closing .kkai-history-detail-card {
+  opacity: 0;
+  transform: translateY(8px) scale(0.985);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+@keyframes kkai-history-detail-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.kkai-history-detail-card {
+  max-height: min(720px, calc(100vh - 15rem));
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.kkai-history-detail-card > .card-body {
+  min-width: 0;
+}
+
+.kkai-history-detail-card .kkai-grid--2 {
+  grid-template-columns: 1fr;
+}
+
+.kkai-history-detail-card .kkai-codeblock {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#job_history-file_checks {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.kkai-history-check-card {
+  overflow: hidden;
+}
+
+.kkai-history-check-card > .card-body {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+#job_history-checks_table,
+#job_history-checks_table .dataTables_wrapper {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+#job_history-checks_table table.dataTable {
+  width: max-content !important;
+  min-width: 100%;
 }
 
 .kkai-job-top {
@@ -628,7 +1111,9 @@ details > summary {
 @media (max-width: 992px) {
   .kkai-grid--2,
   .kkai-grid--3,
-  .kkai-results-grid {
+  .kkai-results-grid,
+  .kkai-stat-grid,
+  .kkai-report-layout {
     grid-template-columns: 1fr;
   }
 
@@ -657,4 +1142,77 @@ details > summary {
   .kkai-qs-hero-kv {
     justify-items: start;
   }
+
+  .kkai-workflow-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================
+   Home Page Enhancements (Subtle Interactions)
+   ========================================= */
+
+/* Subtle Gradient Background for Hero (Static, Professional) */
+.animated-gradient-bg {
+  background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%);
+  border-bottom: 1px solid #e2e8f0;
+}
+
+/* Tone down glassmorphism to a clean, solid card */
+.glassmorphism-card {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03) !important;
+}
+
+/* Subtle Text Enhancement (Removed strong glow) */
+.glow-text {
+  text-shadow: none;
+  font-weight: 700;
+}
+
+/* Subtle Button Hover */
+.pulse-hover {
+  transition: all 0.2s ease-in-out;
+}
+.pulse-hover:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+}
+
+/* Interactive Hover for Cards (Subtle lift) */
+.interactive-hover {
+  transition: all 0.2s ease-in-out;
+}
+.interactive-hover:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08), 0 4px 6px -2px rgba(0, 0, 0, 0.04);
+  border-color: #cbd5e1;
+}
+
+/* Interactive Module Cards (Subtle borders) */
+.interactive-module-card {
+  transition: all 0.2s ease-in-out;
+  border-bottom: 3px solid transparent;
+}
+.interactive-module-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.08);
+}
+.border-gradient-1:hover { border-bottom-color: #60a5fa; }
+.border-gradient-2:hover { border-bottom-color: #f87171; }
+.border-gradient-3:hover { border-bottom-color: #facc15; }
+.border-gradient-4:hover { border-bottom-color: #a78bfa; }
+.border-gradient-5:hover { border-bottom-color: #34d399; }
+.border-gradient-6:hover { border-bottom-color: #fb923c; }
+
+/* Add icons style */
+.workflow-step-card .kkai-workflow-name i {
+  color: var(--kkai-blue);
+  margin-right: 5px;
+}
+.interactive-module-card h5 i {
+  color: var(--kkai-blue);
+  opacity: 0.8;
+  margin-right: 6px;
 }

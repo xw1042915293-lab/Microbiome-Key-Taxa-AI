@@ -14,18 +14,29 @@ prepare_report_context <- function(job_dir) {
   paths <- list(
     tables = list(
       data_check_summary = p("tables", "data_check_summary.csv"),
-      alpha_diversity = p("tables", "alpha_diversity.csv"),
-      alpha_stats = p("tables", "alpha_stats.csv"),
-      beta_pcoa_coordinates = p("tables", "beta_pcoa_coordinates.csv"),
-      beta_permanova = p("tables", "beta_permanova.csv"),
+      alpha_diversity = alpha_output_path(job_dir, "tables", "alpha_diversity.csv", legacy_filename = "alpha_diversity.csv", existing = TRUE),
+      alpha_stats = alpha_output_path(job_dir, "tables", "alpha_stats.csv", legacy_filename = "alpha_stats.csv", existing = TRUE),
+      beta_pcoa_coordinates = beta_output_path(job_dir, "tables", "beta_pcoa_coordinates.csv", legacy_filename = "beta_pcoa_coordinates.csv", existing = TRUE),
+      beta_permanova = beta_output_path(job_dir, "tables", "beta_permanova.csv", legacy_filename = "beta_permanova.csv", existing = TRUE),
+      beta_dispersion = beta_output_path(job_dir, "tables", "beta_dispersion.csv", existing = TRUE),
+      beta_dispersion_distances = beta_output_path(job_dir, "tables", "beta_dispersion_distances.csv", existing = TRUE),
       differential_taxa = p("tables", "differential_taxa.csv"),
       differential_taxa_significant = p("tables", "differential_taxa_significant.csv"),
+      differential_taxa_group_summary = p("tables", "differential_taxa_group_summary.csv"),
+      differential_taxa_pairwise = p("tables", "differential_taxa_pairwise.csv"),
       ml_feature_importance = p("tables", "ml_feature_importance.csv"),
       ml_model_metrics = p("tables", "ml_model_metrics.csv"),
+      ml_cross_validation_metrics = p("tables", "ml_cross_validation_metrics.csv"),
+      ml_out_of_fold_predictions = p("tables", "ml_out_of_fold_predictions.csv"),
+      ml_confusion_matrix = p("tables", "ml_confusion_matrix.csv"),
+      ml_feature_importance_stability = p("tables", "ml_feature_importance_stability.csv"),
+      ml_top_taxa_abundance_statistics = p("tables", "ml_top_taxa_abundance_statistics.csv"),
+      ml_permutation_test = p("tables", "ml_permutation_test.csv"),
       network_nodes = p("tables", "network_nodes.csv"),
       network_edges = p("tables", "network_edges.csv"),
       key_taxa_score = p("tables", "key_taxa_score.csv"),
-      key_taxa_top20 = p("tables", "key_taxa_top20.csv")
+      key_taxa_top20 = p("tables", "key_taxa_top20.csv"),
+      integration_debug = p("logs", "integration_debug.csv")
     ),
     json = list(
       diff_summary = p("json", "diff_summary.json"),
@@ -38,6 +49,7 @@ prepare_report_context <- function(job_dir) {
     ),
     ai = list(
       diff_interpretation = p("ai", "diff_interpretation.md"),
+      key_taxa_interpretation = p("ai", "key_taxa_interpretation.md"),
       methods = p("ai", "methods.md"),
       figure_legends = p("ai", "figure_legends.md"),
       llm_diff_interpretation = p("ai", "llm_diff_interpretation.md"),
@@ -45,11 +57,29 @@ prepare_report_context <- function(job_dir) {
       llm_figure_legends = p("ai", "llm_figure_legends.md")
     ),
     figures = list(
-      alpha_shannon_boxplot = p("figures", "alpha_shannon_boxplot.png"),
-      beta_pcoa_bray = p("figures", "beta_pcoa_bray.png"),
+      alpha_diversity_overview = alpha_overview_figure_path(job_dir, "violin_box", "png", existing = TRUE),
+      alpha_observed_boxplot = alpha_metric_figure_path(job_dir, "Observed", "boxplot", "png", existing = TRUE),
+      alpha_chao1_boxplot = alpha_metric_figure_path(job_dir, "Chao1", "boxplot", "png", existing = TRUE),
+      alpha_shannon_boxplot = alpha_metric_figure_path(job_dir, "Shannon", "boxplot", "png", existing = TRUE),
+      alpha_simpson_boxplot = alpha_metric_figure_path(job_dir, "Simpson", "boxplot", "png", existing = TRUE),
+      beta_pcoa_bray = {
+        path <- beta_figure_path(job_dir, "ellipse_centroid", "png", existing = TRUE)
+        if (!file.exists(path)) path <- beta_figure_path(job_dir, "points", "png", existing = TRUE)
+        path
+      },
+      beta_dispersion = beta_figure_path(job_dir, "dispersion", "png", existing = TRUE),
+      diff_taxa_directional = p("figures", "diff_taxa_directional.png"),
+      diff_taxa_balanced = p("figures", "diff_taxa_balanced.png"),
+      diff_taxa_heatmap = p("figures", "diff_taxa_heatmap.png"),
       diff_taxa_barplot = p("figures", "diff_taxa_barplot.png"),
       ml_importance = p("figures", "ml_importance.png"),
       ml_confusion_matrix = p("figures", "ml_confusion_matrix.png"),
+      ml_roc = p("figures", "ml_figure_roc.png"),
+      ml_pr = p("figures", "ml_figure_pr.png"),
+      ml_feature_importance_stability = p("figures", "ml_figure_feature_importance.png"),
+      ml_top_taxa = p("figures", "ml_figure_top_taxa.png"),
+      ml_performance_distribution = p("figures", "ml_figure_performance_distribution.png"),
+      ml_combined = p("figures", "ml_figure_combined.png"),
       network_plot = p("figures", "network_plot.png"),
       key_taxa_score_barplot = p("figures", "key_taxa_score_barplot.png")
     )

@@ -9,8 +9,44 @@ mod_demo_ui <- function(id) {
   ns <- shiny::NS(id)
 
   shiny::fluidPage(
-    shiny::h3("示例模式"),
-    shiny::p("快速加载内置示例数据（或 data/demo/* 中的文件），并运行完整工作流。"),
+    shiny::h3("示例模式 (Demo)"),
+    shiny::p("在这里，您可以一键加载内置示例数据，快速体验并学习本平台的完整分析流程。"),
+
+    shiny::tags$div(
+      style = "margin-bottom: 20px;",
+      bslib::accordion(
+        id = ns("demo_guide_accordion"),
+        open = "guide_panel",
+        bslib::accordion_panel(
+          title = "工作流操作指南 (如何使用本平台)",
+          value = "guide_panel",
+          icon = shiny::icon("book-open"),
+          shiny::tags$div(
+            class = "kkai-workflow-guide",
+            shiny::tags$h5(shiny::icon("file-upload"), " 1. 上传数据"),
+            shiny::tags$p("进入左侧【快速开始】面板，您需要准备并上传三个核心文件：物种丰度表 (OTU/ASV Table)、样本元数据 (Metadata) 与物种注释表 (Taxonomy)。请确保您的数据为 .csv 或 .tsv 格式。"),
+            
+            shiny::tags$h5(shiny::icon("check-double"), " 2. 数据检查"),
+            shiny::tags$p("上传完成后，系统会自动进行数据对齐校验。如果您的丰度表中包含某些在元数据中找不到的样本，系统会提出警告。只有对齐成功的数据才能继续。"),
+            
+            shiny::tags$h5(shiny::icon("sliders-h"), " 3. 参数设置"),
+            shiny::tags$p("在面板中，您需要指定：", 
+              shiny::tags$ul(
+                shiny::tags$li("分类层级：合并物种丰度的层级（如 Phylum, Genus 等）。"),
+                shiny::tags$li("Beta 多样性距离度量：常用的有 Bray-Curtis。"),
+                shiny::tags$li("分组变量（极其重要）：选择您要比较的组别列（例如 Treatment）。")
+              )
+            ),
+            
+            shiny::tags$h5(shiny::icon("play-circle"), " 4. 运行分析"),
+            shiny::tags$p("设置好参数后点击“一键执行全流程”。系统会在后台创建独立任务，由于包含机器学习与网络分析，大数据集可能需要几分钟时间。"),
+            
+            shiny::tags$h5(shiny::icon("chart-pie"), " 5. 结果总览与报告"),
+            shiny::tags$p("分析完成后，您可以随时在【结果总览】中查看核心结论，或者点击【生成报告】下载完整的 HTML/PDF 格式报告。")
+          )
+        )
+      )
+    ),
 
     bslib::card(
       class = "kkai-card",
@@ -40,7 +76,8 @@ mod_demo_ui <- function(id) {
       bslib::card_header("预期输出（保存在 results/job_*/ 下）"),
       shiny::tags$ul(
         shiny::tags$li("报告：report/report.html"),
-        shiny::tags$li("图形：figures/alpha_shannon_boxplot.png、figures/beta_pcoa_bray.png、figures/ml_importance.png、figures/network_plot.png、figures/key_taxa_score_barplot.png"),
+        shiny::tags$li("Alpha 图形：alpha/figures/ 下按概览和四项指标分类；其他图形继续保存在 figures/。"),
+        shiny::tags$li("Beta 图形：beta/figures/pcoa/ 下保存论文级排序图，beta/figures/dispersion/ 保存离散度诊断图。"),
         shiny::tags$li("表格：tables/differential_taxa.csv、tables/ml_model_metrics.csv、tables/network_nodes.csv、tables/key_taxa_top20.csv 等"),
         shiny::tags$li("AI markdown：ai/diff_interpretation.md（以及可选的 ai/llm_diff_interpretation.md）")
       )
@@ -59,6 +96,8 @@ mod_demo_server <- function(id, state, results_dir = "results") {
     demo_job <- shiny::reactiveVal(NULL) # list(job_id, job_dir)
     run_done <- shiny::reactiveVal(FALSE)
     zip_status <- shiny::reactiveVal("")
+    prog_val <- shiny::reactiveVal(NULL)
+
 
     # Prefer user-provided data/demo/* if present; otherwise fall back to built-in data/example_*.tsv.
     find_demo_files <- function() {
@@ -177,8 +216,9 @@ mod_demo_server <- function(id, state, results_dir = "results") {
 
     output$summary_ui <- shiny::renderUI({
       latest <- latest_demo()
-      active_job_dir <- state$job_dir %||% NULL
-      active_job_id <- state$job_id %||% NULL
+      current_job <- workflow_get_active_job(state)
+      active_job_dir <- current_job$job_dir %||% NULL
+      active_job_id <- current_job$job_id %||% NULL
       gv <- state$parameters$group_var %||% NA_character_
 
       report_path <- if (!is.null(active_job_dir)) file.path(active_job_dir, "report", "report.html") else NULL
@@ -216,9 +256,10 @@ mod_demo_server <- function(id, state, results_dir = "results") {
 
     output$open_report_btn <- shiny::renderUI({
       # Prefer current active job if it has a report; otherwise fall back to the latest demo job.
-      job_id <- state$job_id %||% NULL
-      job_dir <- state$job_dir %||% NULL
-      report_path <- if (!is.null(job_dir)) file.path(job_dir, "report", "report.html") else NULL
+      current_job <- workflow_get_active_job(state)
+      job_id <- current_job$job_id %||% NULL
+      job_dir <- current_job$job_dir %||% NULL
+      report_path <- current_job$report_paths$html %||% NULL
 
       if (is.null(report_path) || !file.exists(report_path)) {
         latest <- latest_demo()
@@ -246,10 +287,12 @@ mod_demo_server <- function(id, state, results_dir = "results") {
 
     output$dl_demo_report <- shiny::downloadHandler(
       filename = function() {
-        paste0((state$job_id %||% (latest_demo()$job_id %||% "demo_job")), "_report.html")
+        current_job <- workflow_get_active_job(state)
+        paste0((current_job$job_id %||% (latest_demo()$job_id %||% "demo_job")), "_report.html")
       },
       content = function(file) {
-        target_dir <- state$job_dir %||% (latest_demo()$job_dir %||% NULL)
+        current_job <- workflow_get_active_job(state)
+        target_dir <- current_job$job_dir %||% (latest_demo()$job_dir %||% NULL)
         if (is.null(target_dir)) {
           writeLines("未找到示例任务，请先加载示例数据并运行工作流。", file)
           return(invisible(NULL))
@@ -266,22 +309,22 @@ mod_demo_server <- function(id, state, results_dir = "results") {
 
     output$dl_demo_zip <- shiny::downloadHandler(
       filename = function() {
-        paste0("microbiome_key_taxa_ai_", (state$job_id %||% (latest_demo()$job_id %||% "demo_job")), ".zip")
+        current_job <- workflow_get_active_job(state)
+        paste0("microbiome_key_taxa_ai_", (current_job$job_id %||% (latest_demo()$job_id %||% "demo_job")), ".zip")
       },
       content = function(file) {
-        target_dir <- state$job_dir %||% (latest_demo()$job_dir %||% NULL)
-        target_id <- state$job_id %||% (latest_demo()$job_id %||% "demo_job")
+        current_job <- workflow_get_active_job(state)
+        target_dir <- current_job$job_dir %||% (latest_demo()$job_dir %||% NULL)
+        target_id <- current_job$job_id %||% (latest_demo()$job_id %||% "demo_job")
         if (is.null(target_dir)) {
           writeLines("未找到示例任务，请先加载示例数据并运行工作流。", file)
           return(invisible(NULL))
         }
         res <- safe_zip_job_results(job_dir = target_dir, job_id = target_id)
         zip_status(if (isTRUE(res$ok)) paste0("full ZIP ready: ", format(Sys.time(), "%H:%M:%S")) else paste0("full ZIP failed: ", res$message))
-        if (!isTRUE(res$ok)) {
-          writeLines(paste0("ZIP failed: ", res$message), file)
-          return(invisible(NULL))
+        if (!is.null(res$zip_path)) {
+          file.copy(res$zip_path, file, overwrite = TRUE)
         }
-        file.copy(res$zip_path, file, overwrite = TRUE)
       }
     )
 
@@ -322,16 +365,8 @@ mod_demo_server <- function(id, state, results_dir = "results") {
 
       # Reset derived fields so downstream tabs reflect the new job.
       state$input_data <- NULL
-      state$check_result <- NULL
-      state$dataset <- NULL
-      state$alpha_result <- NULL
-      state$beta_result <- NULL
-      state$diff_result <- NULL
-      state$ml_result <- NULL
-      state$network_result <- NULL
-      state$key_taxa_result <- NULL
-      state$ai_result <- NULL
-      state$report_paths <- NULL
+      reset_workflow_results(state)
+      reset_workflow_steps(state)
       workflow_set_status(state, "demo_loaded")
 
       # Record reproducibility + DB like the upload step does (plus a demo marker).
@@ -384,72 +419,42 @@ mod_demo_server <- function(id, state, results_dir = "results") {
       if (is.null(gv) || !nzchar(gv)) {
         gv <- read_demo_group_var(state$input_paths$metadata_path) %||% "Treatment"
         state$parameters <- modifyList(state$parameters %||% list(), list(group_var = gv))
-      }
-
-      check_res <- tryCatch(run_all_data_checks(inputs, group_var = gv), error = function(e) e)
-      if (inherits(check_res, "error")) {
-        demo_msg(paste0("Data check failed: ", conditionMessage(check_res)))
-        shiny::showNotification("示例数据检查失败。", type = "error", duration = NULL)
-        return()
-      }
-      state$check_result <- check_res
-      save_data_check_summary(check_res, state$job_dir)
-      append_reproducibility(state$job_dir, list(parameters = state$parameters))
-      db_upsert_job(state$job_id, state$job_dir, status = paste0("demo_data_check_", check_res$status))
-
-      # Ensure we do NOT call any LLM API in demo mode: temporarily clear the configured API key env var.
-      llm_cfg <- tryCatch(read_llm_config("config.yml"), error = function(e) NULL)
-      key_env <- if (is.list(llm_cfg) && nzchar(llm_cfg$api_key_env %||% "")) llm_cfg$api_key_env else "KKAI_API_KEY"
-      old_key <- Sys.getenv(key_env, unset = NA_character_)
-      # Set via Sys.setenv with a dynamic name:
-      do.call(Sys.setenv, stats::setNames(list(""), key_env))
-      on.exit({
-        if (is.na(old_key)) {
-          do.call(Sys.unsetenv, list(key_env))
-        } else {
-          do.call(Sys.setenv, stats::setNames(list(old_key), key_env))
-        }
-      }, add = TRUE)
-
-      workflow_set_status(state, "running_demo_workflow")
+      }      # Ensure we do NOT call any LLM API in demo mode
+      # The state machine handles demo_mode = TRUE by skipping LLM API calls internally.
 
       # Match the Run Analysis tab behavior, but keep it demo-specific.
-      steps_spec <- data.frame(
-        step_id = c("data_prep", "alpha", "beta", "diff", "ai", "ml", "network", "key_taxa", "report"),
-        step = c(
-          "Data preparation",
-          "Alpha diversity",
-          "Beta diversity",
-          "Differential abundance",
-          "AI interpretation",
-          "Machine learning",
-          "Network analysis",
-          "Key Taxa Score",
-          "Report generation"
-        ),
-        stringsAsFactors = FALSE
-      )
+      steps_spec <- workflow_steps_spec()[, c("step_id", "label"), drop = FALSE]
+      names(steps_spec)[names(steps_spec) == "label"] <- "step"
 
       n_steps <- nrow(steps_spec)
+      if (!is.null(prog_val())) {
+        try(prog_val()$close(), silent = TRUE)
+      }
       prog <- shiny::Progress$new(session, min = 0, max = n_steps)
-      on.exit(prog$close(), add = TRUE)
       prog$set(value = 0, message = "正在运行示例工作流", detail = "开始中…")
+      prog_val(prog)
 
       done_flags <- new.env(parent = emptyenv())
       progress_cb <- function(step_id, status, detail = NULL) {
         status <- tolower(status %||% "")
-        if (status %in% c("done", "skipped")) done_flags[[as.character(step_id)]] <- TRUE
+        if (status %in% c("done", "warning", "skipped", "failed")) done_flags[[as.character(step_id)]] <- TRUE
         done_n <- length(ls(done_flags))
-        label <- steps_spec$step[steps_spec$step_id == step_id][1] %||% step_id
-        prog$set(
-          value = min(done_n + if (identical(status, "running")) 0.2 else 0, n_steps),
-          message = paste0("正在运行：", label),
-          detail = detail %||% status
-        )
+        label_match <- steps_spec$step[steps_spec$step_id == step_id]
+        label <- if (length(label_match) >= 1) label_match[[1]] else step_id
+        
+        p <- prog_val()
+        if (!is.null(p)) {
+          p$set(
+            value = min(done_n + if (identical(status, "running")) 0.2 else 0, n_steps),
+            message = paste0("正在运行：", label),
+            detail = detail %||% status
+          )
+        }
       }
 
-      log_path <- file.path(state$job_dir, "logs", "analysis_log.txt")
-      res <- tryCatch(run_full_analysis_workflow(
+      log_path <- file.path(state$job_dir, "logs", "run.log")
+      
+      trigger_analysis_state_machine(
         input_data = state$input_data,
         job_dir = state$job_dir,
         group_var = gv,
@@ -457,30 +462,37 @@ mod_demo_server <- function(id, state, results_dir = "results") {
         tax_level = "Genus",
         config_path = "config.yml",
         progress_cb = progress_cb,
-        log_path = log_path
-      ), error = function(e) e)
+        log_path = log_path,
+        state = state,
+        demo_mode = TRUE,
+        status_running = "running_demo_workflow",
+        status_done = "demo_workflow_done",
+        status_error = "demo_workflow_error"
+      )
 
-      if (inherits(res, "error")) {
-        workflow_set_status(state, "demo_workflow_error")
-        demo_msg(paste0("Demo workflow failed: ", conditionMessage(res)))
-        shiny::showNotification("Demo workflow failed. See the 示例模式 page for details.", type = "error", duration = NULL)
-        return()
+    }, ignoreInit = TRUE)
+
+    shiny::observeEvent(state$status, {
+      st <- state$status %||% ""
+      if (st == "demo_workflow_done" || st == "demo_workflow_error") {
+        p <- prog_val()
+        if (!is.null(p)) {
+          try(p$close(), silent = TRUE)
+          prog_val(NULL)
+        }
+        
+        if (st == "demo_workflow_error") {
+          err_msg <- state$wf_error %||% "未知错误"
+          demo_msg(paste0("Demo workflow failed: ", err_msg))
+          shiny::showNotification("Demo workflow failed. See the 示例模式 page for details.", type = "error", duration = NULL)
+        } else {
+          db_upsert_job(state$job_id, state$job_dir, status = "demo_workflow_done")
+          run_done(TRUE)
+          latest_demo(list(job_id = state$job_id, job_dir = state$job_dir, time = Sys.time()))
+          demo_msg("示例工作流已完成，您可以在本页打开或下载报告。")
+          shiny::showNotification("示例工作流已完成。", type = "message", duration = NULL)
+        }
       }
-
-      # Populate state like the Run Analysis tab does, so result tabs can show previews.
-      state$dataset <- res$dataset
-      state$alpha_result <- res$alpha
-      state$beta_result <- res$beta
-      state$diff_result <- res$diff
-      state$report_paths <- list(html = res$report_path)
-
-      workflow_set_status(state, "demo_workflow_done")
-      db_upsert_job(state$job_id, state$job_dir, status = "demo_workflow_done")
-
-      run_done(TRUE)
-      latest_demo(list(job_id = state$job_id, job_dir = state$job_dir, time = Sys.time()))
-      demo_msg("示例工作流已完成，您可以在本页打开或下载报告。")
-      shiny::showNotification("示例工作流已完成。", type = "message", duration = NULL)
     }, ignoreInit = TRUE)
   })
 }

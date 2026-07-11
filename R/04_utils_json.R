@@ -3,6 +3,7 @@
 write_json_pretty <- function(x, path, auto_unbox = TRUE) {
   assert_non_empty_string(path, "path")
   ensure_dir(dirname(path))
+  x <- sanitize_strings_for_output(x)
   jsonlite::write_json(
     x,
     path = path,
@@ -29,4 +30,3 @@ append_reproducibility <- function(job_dir, params) {
   merged <- modifyList(cur, params, keep.null = TRUE)
   write_json_pretty(merged, repro_path, auto_unbox = TRUE)
 }
-

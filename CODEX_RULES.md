@@ -6,7 +6,7 @@ Project name: Microbiome Key Taxa AI
 
 Chinese title:
 
-基于 microeco 2.0 与大语言模型的微生物组关键菌筛选、可信解释与可复现报告生成系统
+微生物组关键菌筛选与可信解释系统 V1.0
 
 ## Core Positioning
 

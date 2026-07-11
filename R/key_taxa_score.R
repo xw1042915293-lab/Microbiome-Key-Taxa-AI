@@ -71,14 +71,20 @@ if (!exists("clean_taxon_label", mode = "function")) {
 .standardize_taxon_keys <- function(df) {
   if (is.null(df)) return(NULL)
 
-  taxon_col <- .pick_first_col(df, c("taxon", "Taxon", "feature", "Feature", "node", "Node", "taxa", "Taxa", "name", "Name"))
+  taxon_col <- find_taxon_column(df, c("taxon_label", "display_taxon", "taxon", "Taxon", "FeatureID", "feature", "Feature", "Genus", "label", "name", "Name", "node", "Node", "taxa", "Taxa"))
   level_col <- .pick_first_col(df, c("tax_level", "tax_level_name", "tax_level_id", "TaxLevel", "level", "Level", "rank", "Rank"))
+  raw_taxon_col <- .pick_first_col(df, c("taxon", "Taxon", "feature", "Feature", "FeatureID", "name", "Name", "node", "Node"))
 
   if (is.null(taxon_col)) return(NULL)
   out <- df
-  out$taxon <- as.character(out[[taxon_col]])
-  out$taxon <- trimws(out$taxon)
-  out$taxon[out$taxon == ""] <- NA_character_
+  out$match_taxon <- as.character(out[[taxon_col]])
+  out$match_taxon <- trimws(out$match_taxon)
+  out$match_taxon[out$match_taxon == ""] <- NA_character_
+  out$normalized_taxon <- normalize_taxon_name(out$match_taxon)
+  out$display_taxon <- taxon_display_from_any(out$match_taxon)
+  out$original_taxon <- if (!is.null(raw_taxon_col)) as.character(out[[raw_taxon_col]]) else as.character(out[[taxon_col]])
+  out$original_taxon <- trimws(out$original_taxon)
+  out$original_taxon[out$original_taxon == ""] <- NA_character_
 
   if (!is.null(level_col)) {
     out$tax_level <- as.character(out[[level_col]])
@@ -91,6 +97,19 @@ if (!exists("clean_taxon_label", mode = "function")) {
   out
 }
 
+.collapse_taxon_rows <- function(df, primary_col) {
+  if (is.null(df) || !is.data.frame(df) || nrow(df) < 1) return(df)
+  groups <- split(df, df$taxon, drop = TRUE)
+  out <- lapply(groups, function(g) {
+    primary <- suppressWarnings(as.numeric(g[[primary_col]]))
+    idx <- if (any(is.finite(primary))) which.max(replace(primary, !is.finite(primary), -Inf)) else 1L
+    g[idx[1], , drop = FALSE]
+  })
+  out <- dplyr::bind_rows(out)
+  rownames(out) <- NULL
+  out
+}
+
 calculate_differential_score <- function(diff_table) {
   if (is.null(diff_table) || !is.data.frame(diff_table) || nrow(diff_table) < 1) return(NULL)
   x <- .standardize_taxon_keys(diff_table)
@@ -98,22 +117,29 @@ calculate_differential_score <- function(diff_table) {
 
   fdr_col <- .pick_first_col(x, c("FDR", "fdr", "padj", "p_adj", "adj_p", "qvalue", "q_value"))
   lfc_col <- .pick_first_col(x, c("log2FC", "log2fc", "logFC", "log_fc", "LFC", "lfc"))
-  if (is.null(fdr_col) || is.null(lfc_col)) return(NULL)
+  effect_col <- .pick_first_col(x, c("effect_size", "effect", "epsilon_squared", "cliffs_delta"))
+  if (is.null(fdr_col) || (is.null(lfc_col) && is.null(effect_col))) return(NULL)
 
   x$diff_fdr <- suppressWarnings(as.numeric(x[[fdr_col]]))
-  x$log2fc <- suppressWarnings(as.numeric(x[[lfc_col]]))
+  x$log2fc <- if (is.null(lfc_col)) NA_real_ else suppressWarnings(as.numeric(x[[lfc_col]]))
+  x$effect_size <- if (is.null(effect_col)) NA_real_ else suppressWarnings(as.numeric(x[[effect_col]]))
 
-  raw <- (-log10(pmax(x$diff_fdr, 1e-300))) * abs(x$log2fc)
+  magnitude <- ifelse(is.finite(x$log2fc), abs(x$log2fc), abs(x$effect_size))
+  raw <- (-log10(pmax(x$diff_fdr, 1e-300))) * magnitude
   x$differential_score <- normalize_score(raw, higher_is_better = TRUE)
 
   dplyr::tibble(
-    taxon = x$taxon,
+    taxon = x$normalized_taxon,
+    display_taxon = x$display_taxon,
+    original_taxon = x$original_taxon,
     tax_level = x$tax_level,
     differential_score = x$differential_score,
     diff_fdr = x$diff_fdr,
-    log2fc = x$log2fc
+    log2fc = x$log2fc,
+    effect_size = x$effect_size
   ) |>
-    dplyr::filter(!is.na(.data$taxon))
+    dplyr::filter(!is.na(.data$taxon), nzchar(.data$taxon)) |>
+    .collapse_taxon_rows("differential_score")
 }
 
 calculate_ml_score <- function(ml_table) {
@@ -128,12 +154,15 @@ calculate_ml_score <- function(ml_table) {
   x$ml_importance_score <- normalize_score(x$rf_importance, higher_is_better = TRUE)
 
   dplyr::tibble(
-    taxon = x$taxon,
+    taxon = x$normalized_taxon,
+    display_taxon = x$display_taxon,
+    original_taxon = x$original_taxon,
     tax_level = x$tax_level,
     ml_importance_score = x$ml_importance_score,
     rf_importance = x$rf_importance
   ) |>
-    dplyr::filter(!is.na(.data$taxon))
+    dplyr::filter(!is.na(.data$taxon), nzchar(.data$taxon)) |>
+    .collapse_taxon_rows("ml_importance_score")
 }
 
 calculate_network_score <- function(network_nodes) {
@@ -151,13 +180,16 @@ calculate_network_score <- function(network_nodes) {
   x$network_centrality_score <- normalize_score(raw, higher_is_better = TRUE)
 
   dplyr::tibble(
-    taxon = x$taxon,
+    taxon = x$normalized_taxon,
+    display_taxon = x$display_taxon,
+    original_taxon = x$original_taxon,
     tax_level = x$tax_level,
     network_centrality_score = x$network_centrality_score,
     degree = x$degree,
     betweenness = x$betweenness
   ) |>
-    dplyr::filter(!is.na(.data$taxon))
+    dplyr::filter(!is.na(.data$taxon), nzchar(.data$taxon)) |>
+    .collapse_taxon_rows("network_centrality_score")
 }
 
 .resolve_weights <- function(has_diff, has_ml, has_net) {
@@ -185,6 +217,13 @@ calculate_network_score <- function(network_nodes) {
   list(weights = c(), used_sources = character())
 }
 
+.weight_value <- function(weights, key) {
+  if (is.null(weights) || !length(weights) || is.null(names(weights)) || !key %in% names(weights)) {
+    return(0)
+  }
+  suppressWarnings(as.numeric(weights[[key]]))
+}
+
 merge_key_taxa_evidence <- function(diff_score, ml_score, network_score) {
   # Start from the union of taxa across available sources.
   tabs <- list(diff = diff_score, ml = ml_score, network = network_score)
@@ -198,13 +237,27 @@ merge_key_taxa_evidence <- function(diff_score, ml_score, network_score) {
       network_centrality_score = numeric(0),
       diff_fdr = numeric(0),
       log2fc = numeric(0),
+      effect_size = numeric(0),
       rf_importance = numeric(0),
       degree = numeric(0),
       betweenness = numeric(0)
     ))
   }
 
-  out <- Reduce(function(a, b) dplyr::full_join(a, b, by = c("taxon", "tax_level")), tabs)
+  join_with_labels <- function(a, b) {
+    out <- dplyr::full_join(a, b, by = c("taxon", "tax_level"), suffix = c(".x", ".y"))
+    for (base_col in c("display_taxon", "original_taxon")) {
+      x_col <- paste0(base_col, ".x")
+      y_col <- paste0(base_col, ".y")
+      if (x_col %in% names(out) && y_col %in% names(out)) {
+        out[[base_col]] <- dplyr::coalesce(out[[x_col]], out[[y_col]])
+        out[[x_col]] <- NULL
+        out[[y_col]] <- NULL
+      }
+    }
+    out
+  }
+  out <- Reduce(join_with_labels, tabs)
 
   # Keep taxon keys clean.
   out <- out |>
@@ -216,7 +269,7 @@ merge_key_taxa_evidence <- function(diff_score, ml_score, network_score) {
   # Ensure required numeric columns exist.
   needed <- c(
     "differential_score", "ml_importance_score", "network_centrality_score",
-    "diff_fdr", "log2fc", "rf_importance", "degree", "betweenness"
+    "diff_fdr", "log2fc", "effect_size", "rf_importance", "degree", "betweenness"
   )
   for (nm in needed) if (!nm %in% names(out)) out[[nm]] <- NA_real_
   out
@@ -346,7 +399,7 @@ summarize_key_taxa_for_ai <- function(score_table, used_sources, weights) {
     weights = weights,
     n_candidate_taxa = nrow(score_table),
     top_taxa = top |>
-      dplyr::select(.data$taxon, .data$tax_level, .data$key_taxa_score, .data$evidence_count, .data$evidence_sources, .data$recommendation_level) |>
+      dplyr::select("taxon", "tax_level", "key_taxa_score", "evidence_count", "evidence_sources", "recommendation_level") |>
       base::as.data.frame(),
     reliability = reliability
   )
@@ -388,9 +441,9 @@ calculate_key_taxa_score <- function(diff_table, ml_table, network_nodes, job_di
   if (length(weights) == 0) {
     merged$key_taxa_score <- NA_real_
   } else {
-    w_diff <- as.numeric(weights[["diff"]] %||% 0)
-    w_ml <- as.numeric(weights[["ml"]] %||% 0)
-    w_net <- as.numeric(weights[["network"]] %||% 0)
+    w_diff <- .weight_value(weights, "diff")
+    w_ml <- .weight_value(weights, "ml")
+    w_net <- .weight_value(weights, "network")
 
     d <- merged$differential_score
     m <- merged$ml_importance_score
@@ -406,8 +459,13 @@ calculate_key_taxa_score <- function(diff_table, ml_table, network_nodes, job_di
   }
 
   merged$recommendation_level <- vapply(merged$key_taxa_score, .recommend_level, character(1))
-  merged$display_taxon <- clean_taxon_label(as.character(merged$taxon))
-  merged$full_taxon <- as.character(merged$taxon)
+  merged$display_taxon <- ifelse(
+    is.na(merged$display_taxon) | !nzchar(merged$display_taxon),
+    taxon_display_from_any(as.character(merged$original_taxon %||% merged$taxon)),
+    as.character(merged$display_taxon)
+  )
+  merged$full_taxon <- as.character(merged$original_taxon %||% merged$taxon)
+  merged$normalized_taxon <- as.character(merged$taxon)
   merged$tax_level_display <- ifelse(is.na(merged$tax_level) | merged$tax_level == "", "Feature-level", as.character(merged$tax_level))
 
   ranked <- rank_key_taxa(merged, top_n = 20)
@@ -418,6 +476,8 @@ calculate_key_taxa_score <- function(diff_table, ml_table, network_nodes, job_di
   required_cols <- c(
     "taxon",
     "display_taxon",
+    "normalized_taxon",
+    "original_taxon",
     "tax_level",
     "tax_level_display",
     "differential_score",

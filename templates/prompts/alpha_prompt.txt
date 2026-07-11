@@ -1,5 +1,0 @@
-You will be given structured JSON summary statistics from a microbiome alpha diversity analysis.
-Do not infer causality; describe associations only.
-If results are not significant, explicitly say so.
-Always include caution notes about sample size and limitations.
-

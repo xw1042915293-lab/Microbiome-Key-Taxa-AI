@@ -35,6 +35,21 @@ read_table_auto <- function(file_path) {
   tibble::as_tibble(dt)
 }
 
+sanitize_import_table <- function(df, file_type) {
+  assert_non_empty_string(file_type, "file_type")
+  cleaned <- sanitize_utf8_data_frame(df, file_type = file_type)
+  if (nrow(cleaned$diagnostics) > 0) {
+    stop_invalid_utf8_input(
+      cleaned$diagnostics,
+      message = paste0(
+        "当前输入表包含非 UTF-8 字符，常见原因是 Excel 普通 CSV 使用 GBK 编码。请另存为 CSV UTF-8，或检查 taxonomy / metadata 中的中文和特殊符号。\n",
+        "检测到问题文件：", file_type
+      )
+    )
+  }
+  cleaned$data
+}
+
 standardize_input_tables <- function(input_list) {
   if (!is.list(input_list)) stop("standardize_input_tables(): input_list must be a list.", call. = FALSE)
   needed <- c("abundance", "metadata", "taxonomy")
@@ -44,6 +59,10 @@ standardize_input_tables <- function(input_list) {
   abundance <- input_list$abundance
   metadata <- input_list$metadata
   taxonomy <- input_list$taxonomy
+
+  abundance <- sanitize_import_table(abundance, "abundance")
+  metadata <- sanitize_import_table(metadata, "metadata")
+  taxonomy <- sanitize_import_table(taxonomy, "taxonomy")
 
   if (!is.data.frame(abundance) || ncol(abundance) < 2) stop("abundance must be a data.frame with >=2 columns.", call. = FALSE)
   if (!is.data.frame(metadata) || ncol(metadata) < 2) stop("metadata must be a data.frame with >=2 columns.", call. = FALSE)
@@ -67,6 +86,10 @@ standardize_input_tables <- function(input_list) {
   tx_nm[fid_col[1]] <- "FeatureID"
   names(taxonomy) <- tx_nm
 
+  abundance <- sanitize_import_table(abundance, "abundance")
+  metadata <- sanitize_import_table(metadata, "metadata")
+  taxonomy <- sanitize_import_table(taxonomy, "taxonomy")
+
   list(
     abundance = abundance,
     metadata = metadata,
@@ -85,4 +108,3 @@ read_microbiome_inputs <- function(abundance_path, metadata_path, taxonomy_path)
 
   standardize_input_tables(list(abundance = abundance, metadata = metadata, taxonomy = taxonomy))
 }
-

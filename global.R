@@ -14,6 +14,7 @@ if (is.numeric(max_mb) && length(max_mb) == 1 && !is.na(max_mb) && max_mb > 0) {
 
 # Utilities / workflow state
 source("R/02_utils_file.R", local = TRUE)
+source("R/03_utils_plot.R", local = TRUE)
 source("R/04_utils_json.R", local = TRUE)
 source("R/05_database.R", local = TRUE)
 source("R/workflow_state.R", local = TRUE)
@@ -27,6 +28,8 @@ source("R/analysis_alpha.R", local = TRUE)
 source("R/analysis_beta.R", local = TRUE)
 source("R/analysis_diff.R", local = TRUE)
 source("R/analysis_network.R", local = TRUE)
+source("R/ai_prompt.R", local = TRUE)
+source("R/report_prepare.R", local = TRUE)
 source("R/report_render.R", local = TRUE)
 source("R/workflow_run.R", local = TRUE)
 

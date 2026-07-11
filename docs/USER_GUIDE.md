@@ -1,181 +1,230 @@
-# 用户使用手册（Microbiome Key Taxa AI）
+# 微生物组关键菌筛选与可信解释系统 V1.0
 
-本文档面向第一次使用本项目的人，按“从打开 RStudio 到生成 report.html”的顺序说明操作。本文档不会引导新增功能或修改分析逻辑。
+## 用户操作手册
 
-## 1. 如何打开 RStudio
-1. 安装并打开 RStudio（RStudio Desktop）。
-2. 用 RStudio 打开本项目根目录（推荐方式）：
-   - 菜单 `File -> Open Project...`，选择项目根目录（包含 `app.R`、`global.R` 的目录）。
-   - 如果没有 `.Rproj` 文件也没关系，后续手动设置工作目录即可。
+## 1. 软件简介
 
-## 2. 如何设置工作目录
-工作目录必须是项目根目录（能直接看到 `app.R`、`config.yml`、`modules/`、`R/` 的那个目录）。
+本系统用于导入微生物组丰度表、样本信息表和分类注释表，完成数据检查、多样性分析、差异丰度分析、机器学习筛选、共现网络分析、关键菌综合评分、受约束解释和报告生成。
 
-在 RStudio 中设置方式：
-1. 打开 Console（控制台）。
-2. 执行（把路径改成你的实际路径）：
+系统在本机运行，通过浏览器显示操作界面。每次分析会创建独立任务目录，用户可以加载历史任务或下载完整结果包。
 
-```r
-setwd("D:/Microbiome Key Taxa AI")
-getwd()
-```
+## 2. 运行准备
 
-如果 `getwd()` 输出的目录下能看到 `app.R`，说明设置正确。
+### 2.1 建议环境
 
-## 3. 如何安装缺失 R 包
-本项目使用 `renv` 锁定依赖版本；根目录的 `.Rprofile` 会自动激活 `renv`。
+- Windows 10/11，64 位；
+- R 及项目依赖包；
+- Quarto，用于生成 HTML/PDF 报告；
+- Chrome、Edge 或其他现代浏览器。
 
-推荐安装方式（一次性恢复全部依赖）：
+依赖版本以项目根目录中的 `renv.lock` 为准。
+
+### 2.2 恢复依赖
+
+首次运行时，在项目根目录打开 R 或 RStudio，执行：
+
 ```r
 renv::restore()
 ```
 
-如果你不想用 renv，也可以按报错提示手动安装缺失包，例如：
-```r
-install.packages(c("shiny", "bslib", "DT"))
-```
+恢复过程需要访问 R 软件包来源，完成后建议重新启动 R 会话。
 
-安装完成后建议重启 R 会话：
-- 菜单 `Session -> Restart R`
+### 2.3 启动系统
 
-## 4. 如何运行 shiny::runApp()
-在项目根目录的 RStudio Console 执行：
+在项目根目录执行：
+
 ```r
 shiny::runApp()
 ```
 
-运行后会弹出 Shiny 窗口（或在浏览器中打开）。看到顶部导航栏（Home/Upload Data/Data Check/.../Report）说明启动成功。
+命令行方式示例：
 
-## 5. 如何上传 abundance / metadata / taxonomy
-进入顶部导航 `Upload Data` 页签：
-1. 在 `Abundance table (tsv/csv/txt)` 上传丰度表。
-2. 在 `Metadata (tsv/csv/txt)` 上传样本信息表。
-3. 在 `Taxonomy (tsv/csv/txt)` 上传分类注释表。
-4. 点击 `Create Job & Save Inputs`。
-
-成功后页面会显示：
-- `job_id: ...`
-- `job_dir: ...`
-
-同时输入会被固化到当前 job 目录：
-- `results/<job_id>/input/abundance.tsv`
-- `results/<job_id>/input/metadata.tsv`
-- `results/<job_id>/input/taxonomy.tsv`
-
-## 6. 如何进入 Data Check
-点击顶部导航 `Data Check` 页签，然后点击：
-- `Run Data Check`
-
-运行完成后：
-- 页面会显示 `Overall status: pass / warning / error`
-- 表格区会列出各项检查结果
-- 汇总会写入：`results/<job_id>/tables/data_check_summary.csv`
-
-说明：
-- Data Check 是必做步骤；后续分析依赖这里读入并校验过的数据。
-
-## 7. 如何选择 Parameters
-点击顶部导航 `Parameters` 页签：
-1. 在 `Group variable` 下拉框选择分组变量（来自 metadata，除 `SampleID` 外的列）。
-2. 点击 `Save Parameters` 保存参数。
-
-保存成功后，参数会写入当前 job 的：
-- `results/<job_id>/reproducibility.json`
-
-注意：
-- metadata 必须包含 `SampleID` 列，否则这里会提示 “missing SampleID”。
-
-## 8. 如何 Run Analysis
-点击顶部导航 `Run Analysis` 页签：
-1. 确保你已经做过 `Data Check`，并且已在 `Parameters` 保存 `group_var`。
-2. 点击 `Run Full Workflow (Phase 2-8)`。
-
-运行过程：
-- 页面会显示 `job_id/job_dir/status/report` 信息。
-- 下方会出现一个“产物存在性表格”（artifact table），用于快速确认哪些文件已经生成。
-
-如果运行失败：
-- Shiny 会弹红色通知（包含错误信息）。
-- 同时会写日志到：`results/<job_id>/logs/error.log`
-
-## 9. 如何查看 Alpha / Beta / Diff / Report
-运行完成后按页签查看：
-
-1. `Alpha Diversity`
-   - 预览 `figures/alpha_shannon_boxplot.png`
-2. `Beta Diversity`
-   - 预览 `figures/beta_pcoa_bray.png`
-3. `Diff Abundance`
-   - 预览 `figures/diff_volcano.png`
-   - 查看“Significant Taxa”显著差异表
-4. `Report`
-   - 点击 `Render HTML Report` 渲染最终报告
-   - 若渲染成功，会出现 `Open Report` 按钮
-
-## 10. 如何打开 report.html
-在 `Report` 页签点击 `Open Report`（会在新标签页打开）。
-
-你也可以在文件系统中直接打开（双击）：
-- `results/<job_id>/report/report.html`
-
-## 11. 常见报错处理
-
-### 11.1 Missing required R packages
-现象：
-- 启动或运行时提示：`Missing required R packages: ...`
-
-处理：
-1. 优先执行（推荐）：
-```r
-renv::restore()
+```powershell
+Rscript -e "shiny::runApp('.', host='127.0.0.1', port=3850, launch.browser=TRUE)"
 ```
-2. 或按提示逐个安装缺失包：
-```r
-install.packages("包名")
+
+如果 `Rscript` 未加入系统 PATH，可在 RStudio 中运行，或使用本机 `Rscript.exe` 的完整路径。
+
+## 3. 输入数据准备
+
+系统支持 `.tsv`、`.csv` 和 `.txt`，推荐使用 UTF-8 编码的 TSV 文件。第一行必须为列名。
+
+### 3.1 丰度表
+
+```text
+FeatureID  Sample01  Sample02  Sample03
+F001       12        8         0
+F002       3         15        6
 ```
-3. 安装后 `Session -> Restart R`，再重新 `shiny::runApp()`。
 
-### 11.2 randomForest 包缺失
-现象：
-- 机器学习/标志物筛选相关步骤报错提示缺少 `randomForest`。
+要求：
 
-处理：
-```r
-install.packages("randomForest")
+- 包含 `FeatureID`；
+- 其余列名为样本编号；
+- 丰度值为非负数值；
+- 样本列名与样本信息表中的 `SampleID` 对应。
+
+### 3.2 样本信息表
+
+```text
+SampleID  Group
+Sample01  Control
+Sample02  Control
+Sample03  Treatment
 ```
-安装后重启 R 会话并重新运行。
 
-### 11.3 Quarto 不可用
-现象：
-- 点击 `Render HTML Report` 后报错，或提示无法调用 Quarto。
+要求：
 
-处理思路：
-1. 确认已安装 Quarto（桌面程序，不只是 R 包）。
-2. 确认 R 包 `quarto` 已安装（本项目依赖中包含，但环境异常时可能缺失）：
-```r
-install.packages("quarto")
+- 包含唯一的 `SampleID`；
+- 至少包含一个可用分组变量；
+- 分组变量应具有两个或以上有效水平。
+
+### 3.3 分类注释表
+
+```text
+FeatureID  Kingdom   Phylum          Genus
+F001       Bacteria  Firmicutes      Genus_A
+F002       Bacteria  Bacteroidota    Genus_B
 ```
-3. 查看错误细节：
-   - Shiny 弹窗提示
-   - `results/<job_id>/logs/error.log`
 
-### 11.4 没有选择 group variable
-现象：
-- 在 `Run Analysis` 点击运行后报错类似：`group_var not set. Please save it in Parameters.`
+要求：
 
-处理：
-1. 回到 `Parameters` 页签。
-2. 在 `Group variable` 选择一列（例如 `Group`）。
-3. 点击 `Save Parameters`，再重新运行分析。
+- 包含 `FeatureID`；
+- 特征编号与丰度表对应；
+- 建议包含 Genus 等标准分类层级。
 
-### 11.5 report.html 没生成
-现象：
-- `Report` 页签一直显示 `Report not yet generated.`，或没有出现 `Open Report`。
+## 4. 页面说明
 
-处理：
-1. 先确认已经在 `Run Analysis` 跑完 `Run Full Workflow (Phase 2-8)`（报告依赖结果文件）。
-2. 再点击 `Render HTML Report`。
-3. 若仍失败，优先排查 Quarto（见 11.3），并查看：
-   - `results/<job_id>/logs/error.log`
-   - `results/<job_id>/report/` 下是否有中间文件（如有）
+| 页面 | 用途 |
+|---|---|
+| 首页 | 查看软件能力、标准流程和使用提示 |
+| 快速开始 | 集中完成数据选择、任务创建、检查和分析 |
+| 示例模式 | 使用内置数据体验完整流程 |
+| 结果总览 | 查看当前任务状态、图表和核心指标 |
+| 报告中心 | 生成、打开并下载报告或结果包 |
+| 历史任务 | 浏览并加载既有任务 |
+| 更多 | 进入上传、检查、参数和各分析模块的详细页面 |
 
+## 5. 推荐操作流程
+
+### 5.1 使用示例数据
+
+1. 打开“示例模式”。
+2. 查看示例数据说明。
+3. 创建示例任务。
+4. 运行数据检查。
+5. 选择示例分组变量 `Group`。
+6. 启动完整分析流程。
+7. 在“结果总览”查看图表和表格。
+8. 在“报告中心”生成并打开报告。
+
+示例数据只用于功能演示，不代表真实科研结论。
+
+### 5.2 使用自有数据
+
+1. 打开“快速开始”或“更多 → 上传数据”。
+2. 分别选择丰度表、样本信息表和分类注释表。
+3. 创建任务并保存输入。
+4. 运行数据质量检查。
+5. 如出现错误，根据检查明细修改原始文件后重新创建任务。
+6. 选择分组变量并保存参数。
+7. 运行完整分析流程。
+8. 等待各阶段状态更新，不要在运行过程中关闭 R 会话。
+9. 打开“结果总览”复核关键结果。
+10. 在“报告中心”生成报告并下载交付物。
+
+## 6. 数据检查结果说明
+
+| 状态 | 含义 | 建议操作 |
+|---|---|---|
+| 通过 | 未发现阻断性问题 | 可以继续分析 |
+| 警告 | 数据可继续处理，但存在可能影响解释的问题 | 阅读明细并判断是否接受 |
+| 错误 | 输入不满足分析要求 | 修正数据后重新导入 |
+
+常见错误包括：缺少 `SampleID` 或 `FeatureID`、样本名称不一致、特征无法对应、丰度中存在文本或负值、标识重复等。
+
+## 7. 结果阅读说明
+
+### 7.1 Alpha 多样性
+
+用于描述单个样本内部的丰富度和多样性。页面顶部提供两个下拉菜单：第一个选择四指标概览或 Observed、Chao1、Shannon、Simpson 单项指标；第二个选择箱线图、小提琴图、雨云式组合图、原始散点与中位数、均值±标准误、均值±95%置信区间或中位数±四分位距。Observed 和 Chao1 侧重丰富度，Shannon 和 Simpson 同时反映类群分布结构。组间检验结果反映统计关联，不表示分组因素必然导致多样性变化。分组水平过多时，建议确认所选变量是否为多个实验因素拼接形成的复合分组。
+
+### 7.2 Beta 多样性
+
+PCoA 图展示样本间距离结构，页面下拉菜单可切换纯样本点、95%置信椭圆、分组凸包、组中心连线、椭圆与中心组合以及 PERMDISP 离散度诊断图。论文图同时标注轴解释率、PERMANOVA R²/p 值和 PERMDISP p 值。PERMANOVA 用于评价分组与群落中心的关联，PERMDISP 用于检查组内离散度是否一致；若两者均显著，应谨慎判断差异来自组中心、离散程度或二者共同作用。
+
+### 7.3 差异丰度
+
+完整结果表包含全部被检验分类单元，显著结果表是按阈值筛选的子集。应同时关注效应量、FDR、样本量和分类注释质量。
+
+### 7.4 机器学习
+
+特征重要性表示变量对当前模型分类的相对贡献。训练或内部评价较好不代表对新数据具有同等性能。
+
+### 7.5 共现网络
+
+节点表示分类单元，边表示满足阈值的统计相关关系。网络中心性可用于候选排序，但不能据此认定直接相互作用。
+
+### 7.6 关键菌综合评分
+
+综合评分融合差异、机器学习和网络证据。排名越高表示在当前数据和参数下获得的综合支持越强，但仍属于候选优先级，不是因果关键性的证明。
+
+### 7.7 受约束解释
+
+解释文本用于概括结构化统计结果，并包含显著性和因果边界。启用外部模型时仍应由专业人员复核，不建议直接作为论文结论使用。
+
+## 8. 输出文件说明
+
+每次任务保存在 `results/<job_id>/`：
+
+- `input/`：输入副本；
+- `alpha/`：Alpha 专属表格和按指标分类的科研图形；
+- `beta/`：Beta 专属 PCoA、PERMANOVA、PERMDISP 和论文图；
+- `tables/`：CSV 结果表；
+- `figures/`：PNG/PDF 图形；
+- `json/`：统计摘要及可选模型调用记录；
+- `ai/`：方法、图例和解释文本；
+- `objects/`：R 数据对象；
+- `report/`：HTML/PDF 报告；
+- `logs/`：运行记录；
+- `reproducibility.json`：文件校验值、参数和阶段状态。
+
+建议归档时下载完整结果 ZIP，同时单独保存最终报告和关键表格。
+
+## 9. 常见问题
+
+### 9.1 系统提示缺少 R 包
+
+在项目根目录执行 `renv::restore()`，完成后重新启动 R。
+
+### 9.2 无法选择分组变量
+
+检查样本信息表是否包含 `SampleID` 之外的有效列，并确认该列至少有两个非空水平。
+
+### 9.3 数据检查提示样本不一致
+
+确认丰度表样本列名与样本信息表 `SampleID` 完全一致，注意空格、大小写和不可见字符。
+
+### 9.4 没有显著差异结果
+
+这不一定是程序错误。应检查完整结果表、样本量、分组设计和筛选阈值，不应为了得到显著结果而随意修改阈值。
+
+### 9.5 网络没有边
+
+当前数据在既定阈值下可能没有足够强的相关关系。查看网络摘要和阈值记录，不应将空网络解释为不存在任何生物关联。
+
+### 9.6 大模型不可用
+
+检查环境变量、服务地址和网络。外部模型是可选能力，本地规则解释和统计结果不依赖模型调用。
+
+### 9.7 报告无法生成
+
+确认已安装 Quarto，且当前任务已有分析产物。查看界面错误提示和任务 `logs/` 目录。报告失败不会删除已经生成的表格和图形。
+
+## 10. 数据与结果管理建议
+
+- 导入前对涉及个人或临床信息的数据进行去标识化；
+- 不要将 API 密钥写入 `config.yml`、截图或结果包；
+- 不直接编辑任务目录内的结果文件，以免报告与可复现记录不一致；
+- 正式研究应保留原始数据、冻结版本代码、`renv.lock` 和完整任务压缩包；
+- 自动解释、机器学习和网络结果均需结合研究设计进行人工审核。

@@ -11,6 +11,7 @@ required_packages <- c(
   "tibble",
   "purrr",
   "ggplot2",
+  "ggrepel",
   "jsonlite",
   "yaml",
   "DBI",
@@ -18,7 +19,9 @@ required_packages <- c(
   "digest",
   "microeco",
   "vegan",
-  "quarto"
+  "quarto",
+  "markdown",
+  "igraph"
 )
 
 missing <- required_packages[!vapply(required_packages, requireNamespace, logical(1), quietly = TRUE)]

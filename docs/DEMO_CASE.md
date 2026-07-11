@@ -1,6 +1,8 @@
-# DEMO CASE（演示用固定案例）
+# 微生物组关键菌筛选与可信解释系统 V1.0
 
-本文档用于你在答辩/演示时快速跑通一套完整流程，并核对“应该生成哪些文件、报告在哪里、重点展示哪些模块”。示例以仓库自带的 `data/example_*.tsv` 为准。
+## 现场演示提纲
+
+本文档用于答辩或软件演示时快速跑通一套完整流程，并核对“应该生成哪些文件、报告在哪里、重点展示哪些模块”。示例以仓库自带的 `data/example_*.tsv` 为准。正式演示前应先在冻结后的 V1.0 上完整预演。
 
 ## 示例数据位置
 示例数据在项目根目录的 `data/`：
@@ -11,21 +13,21 @@
 建议直接用这一套数据进行现场演示，文件小、出图快、结构标准。
 
 ## 推荐上传顺序
-在 Shiny 的 `Upload Data` 页签按界面顺序上传：
+在“快速开始”或“上传数据”页面按界面顺序导入：
 1. abundance: `data/example_abundance.tsv`
 2. metadata: `data/example_metadata.tsv`
 3. taxonomy: `data/example_taxonomy.tsv`
 
-然后点击 `Create Job & Save Inputs` 创建 job。
+然后创建任务并保存输入。
 
 ## 推荐选择的 group_var
-在 `Parameters` 页签，推荐选择：
+在参数设置步骤，推荐选择：
 - `Group`
 
 说明：示例 metadata 同时包含 `Group` 与 `Treatment`，为了演示分组最清晰、结果最直观，优先用 `Group`。
 
 ## 完整运行后应生成哪些文件（用于现场核对）
-点击 `Run Analysis -> Run Full Workflow (Phase 2-8)` 跑完后，进入对应 job 目录：
+运行完整分析流程后，进入对应任务目录：
 `results/<job_id>/`
 
 以下文件建议作为“跑通标志”进行核对（存在即可，不要求逐个打开）：
@@ -40,10 +42,12 @@
 
 3. 表格产物（tables）
 - `tables/data_check_summary.csv`
-- `tables/alpha_diversity.csv`
-- `tables/alpha_stats.csv`
-- `tables/beta_pcoa_coordinates.csv`
-- `tables/beta_permanova.csv`
+- `alpha/tables/alpha_diversity.csv`
+- `alpha/tables/alpha_stats.csv`
+- `beta/tables/beta_pcoa_coordinates.csv`
+- `beta/tables/beta_permanova.csv`
+- `beta/tables/beta_dispersion.csv`
+- `beta/tables/beta_dispersion_distances.csv`
 - `tables/differential_taxa.csv`
 - `tables/differential_taxa_significant.csv`
 - `tables/ml_feature_importance.csv`
@@ -54,8 +58,13 @@
 - `tables/key_taxa_top20.csv`
 
 4. 图形产物（figures）
-- `figures/alpha_shannon_boxplot.png`
-- `figures/beta_pcoa_bray.png`
+- `alpha/figures/overview/`：七类四指标概览图
+- `alpha/figures/observed/`：Observed 七类图形
+- `alpha/figures/chao1/`：Chao1 七类图形
+- `alpha/figures/shannon/`：Shannon 七类图形
+- `alpha/figures/simpson/`：Simpson 七类图形
+- `beta/figures/pcoa/`：五类论文级 PCoA 图
+- `beta/figures/dispersion/`：PERMDISP 诊断图
 - `figures/diff_volcano.png`
 - `figures/ml_importance.png`
 - `figures/network_plot.png`
@@ -80,7 +89,7 @@
 7. 最终报告
 - `report/report.html`
 
-提示：`Run Analysis` 页签下方会自动展示一个 artifact 表（exists TRUE/FALSE），这是现场最省心的核对方式。
+提示：运行页面和结果总览会展示阶段状态与产物信息，演示前应同时在任务目录核对关键文件。
 
 ## 报告路径示例
 报告固定写入 job 目录的：
@@ -93,10 +102,10 @@
 推荐一套“从结果到解释、从统计到可复现”的叙事顺序：
 
 1. Alpha Diversity
-- 展示 `Alpha Diversity` 页签的 Shannon 图（强调组间差异直观性与输出落地到 `figures/`）。
+- 展示 Alpha 页面的四指标概览、指标切换和总体检验表，说明丰富度与多样性指标的区别。
 
 2. Beta Diversity
-- 展示 `Beta Diversity` 页签的 Bray-Curtis PCoA（强调群落结构差异与 `beta_permanova.csv` 的统计检验支撑）。
+- 展示 Beta 页面的“95%置信椭圆 + 组中心”视图、PERMANOVA 和 PERMDISP 表，并切换到离散度诊断图说明统计边界。
 
 3. Differential Abundance
 - 展示 `Diff Abundance` 页签的 volcano 图与显著差异列表（强调可追溯到 `differential_taxa_significant.csv`）。
@@ -115,4 +124,3 @@
 
 8. Reproducibility Record
 - 打开 `reproducibility.json`（强调“输入文件 MD5 + 参数记录 + 可复现实验链条”，并指出每个 job 独立目录便于留档与对比）。
-

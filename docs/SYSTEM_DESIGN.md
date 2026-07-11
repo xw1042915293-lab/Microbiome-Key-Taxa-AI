@@ -1,183 +1,210 @@
-# 系统设计（SYSTEM DESIGN）
+# 微生物组关键菌筛选与可信解释系统 V1.0
 
-## 1. 系统总体架构
-本系统定位为 **microeco 2.0 的上层应用**：以 R Shiny 提供交互式入口，以“作业（job）目录”固化每次运行的输入、参数、结果与报告，并在此基础上提供受约束的 AI 文本解释与可复现 HTML 报告生成。
+## 系统设计说明书
 
-核心设计目标：
-- 端到端：上传三表 -> 校验 -> 参数选择 -> 一键分析 -> 结果预览 -> HTML 报告。
-- 可复现：每次运行独立 job 目录；记录输入 MD5、参数与阶段信息。
-- 可信解释：AI 解释只允许使用结构化统计结果与本地规则解释文本；明确不做因果/机制结论。
-- 不替代 microeco：分析核心由 microeco 2.0 提供（Alpha、多层级丰度聚合等），系统侧重流程编排与结果组织。
+## 1. 设计目标
 
-推荐用如下数据流理解系统：
+系统采用 R Shiny 构建单机 Web 应用，在保留 R 生态分析能力的同时，将数据导入、质量检查、统计分析、候选排序、解释生成和报告输出组织为统一流程。设计重点是模块化、任务隔离、产物落盘、状态可见和结果可追溯。
+
+## 2. 总体架构
 
 ```mermaid
 flowchart LR
-  U["用户（RStudio / 浏览器）"] --> S["Shiny 前端（模块化 Tab）"]
-  S --> J["Job 管理（results/job_*/）"]
-  S --> D1["Upload Inputs"]
-  S --> D2["Data Check"]
-  S --> P["Parameters（group_var）"]
-  S --> W["Run Full Workflow（Phase 2-8）"]
-  W --> A["Alpha 多样性（microeco）"]
-  W --> B["Beta 多样性（vegan）"]
-  W --> DF["差异分析（Wilcoxon / Kruskal + FDR）"]
-  W --> ML["随机森林（randomForest）"]
-  W --> NW["共现网络（Spearman + 中心性）"]
-  W --> K["Key Taxa Score（融合打分）"]
-  W --> AI["AI 解释（本地规则 + LLM 受约束摘要）"]
-  W --> Q["Quarto 报告渲染（report.html）"]
-  J --> O["输出：tables/ figures/ json/ ai/ report/ logs/ reproducibility.json"]
+  U["用户浏览器"] --> UI["Shiny 界面层"]
+  UI --> WS["工作流与状态层"]
+  WS --> BL["分析业务层"]
+  WS --> JM["任务与文件管理层"]
+  BL --> PKG["microeco、vegan、randomForest 等分析组件"]
+  BL --> AI["规则解释与可选模型服务"]
+  BL --> RP["Quarto 报告渲染"]
+  JM --> FS["任务目录与 SQLite"]
+  FS --> OUT["表格、图形、JSON、报告和日志"]
 ```
 
-## 2. 数据输入模块（Upload Inputs）
-功能：
-- 接收三类文件：abundance / metadata / taxonomy（tsv/csv/txt）。
-- 点击“Create Job & Save Inputs”后创建新 job 目录，并将输入固化为：
-  - `results/<job_id>/input/abundance.tsv`
-  - `results/<job_id>/input/metadata.tsv`
-  - `results/<job_id>/input/taxonomy.tsv`
+### 2.1 界面层
 
-关键点：
-- 统一重命名与落盘，避免后续流程依赖用户原始文件名。
-- 写入可复现记录：记录输入文件 MD5 与原始文件名（写入 `reproducibility.json`）。
-- 同步写入 SQLite（可选）：记录 job 元信息与文件条目（便于后续追踪）。
+`app.R` 负责导航和模块组装，`modules/` 保存各页面的 UI 与服务逻辑。界面层读取任务状态、收集用户输入并调用业务函数，不承担底层统计计算。
 
-## 3. 数据校验模块（Data Check）
-定位：
-- 强制步骤，用于在分析前发现格式错误与关键字段缺失。
+### 2.2 工作流与状态层
 
-输出：
-- `results/<job_id>/tables/data_check_summary.csv`
+`R/workflow_state.R` 管理活动任务、阶段状态和界面共享状态；`R/workflow_run.R` 编排数据检查、数据集构建、各分析模块、解释生成和报告渲染。
 
-交互：
-- 在界面中展示总体状态 `pass / warning / error` 与检查项表格。
+### 2.3 分析业务层
 
-## 4. microeco 分析模块（microeco Analysis）
-系统依赖 microeco 2.0 对数据对象进行组织与基础计算（如 Alpha 多样性计算、按分类层级聚合丰度等）。
+`R/` 下的分析文件接收普通 R 参数，返回普通列表，并将规定产物写入任务目录。核心文件包括：
 
-强调：
-- 本系统不重新实现 microeco 的核心算法；侧重于 **调用、编排、保存与展示**。
+- `data_import.R`、`data_check.R`：数据读取与检查；
+- `build_microeco.R`：分析数据对象构建；
+- `analysis_alpha.R`、`analysis_beta.R`、`analysis_diff.R`：多样性和差异分析；
+- `analysis_ml.R`、`analysis_network.R`：机器学习和网络分析；
+- `key_taxa_score.R`：多证据综合评分；
+- `ai_rules.R`、`ai_prompt.R`、`ai_client.R`、`ai_interpretation.R`：解释约束和可选模型调用；
+- `report_prepare.R`、`report_render.R`：报告上下文准备与渲染。
 
-## 5. 差异分析模块（Differential Abundance）
-输入：
-- microeco 数据对象中的分组信息（`group_var`）与指定分类层级（如 Genus）。
+### 2.4 存储层
 
-方法要点：
-- 两组比较：Wilcoxon 秩和检验（`wilcox.test`）。
-- 三组及以上：Kruskal-Wallis 秩和检验（`kruskal.test`）。
-- 多重比较校正：FDR（`p.adjust(method="fdr")`）。
+文件系统保存完整任务产物；SQLite 用于记录任务和文件元信息。文件产物是复核与交付的主要依据，数据库不替代任务目录。
 
-输出（job 目录）：
-- `tables/differential_taxa.csv`
-- `tables/differential_taxa_significant.csv`（即使无显著结果也会生成空表以保证流程稳定）
-- `json/diff_summary.json`
-- `figures/diff_volcano.png/.pdf`、`figures/diff_taxa_barplot.png/.pdf`
+## 3. 页面模块设计
 
-## 6. AI 可信解释模块（AI-Constrained Interpretation）
-本系统将解释分为两层：
+| 页面 | 主要职责 |
+|---|---|
+| 首页 | 软件说明、流程引导和快捷入口 |
+| 快速开始 | 在一个页面完成数据选择、检查、运行和状态查看 |
+| 示例模式 | 使用内置示例数据创建演示任务 |
+| 结果总览 | 汇总当前任务状态、核心指标、图表和文件 |
+| 报告中心 | 生成、打开和下载报告及结果包 |
+| 历史任务 | 浏览、加载和管理既有任务 |
+| 更多功能 | 提供上传、检查、参数、单项分析和解释页面 |
 
-1. 本地规则解释（Phase 4A）
-- 只读取已经生成的统计产物（如 `diff_summary.json`、`differential_taxa.csv`、`alpha_stats.csv`、`beta_permanova.csv`）。
-- 产出三份 Markdown（写入 `ai/`）：
-  - `ai/diff_interpretation.md`
-  - `ai/methods.md`
-  - `ai/figure_legends.md`
-- 内置谨慎声明：解释为统计约束摘要，不推断因果/机制。
+模块通过共享的工作流状态获取当前任务，不直接互相读取内部响应式对象。
 
-2. LLM 受约束摘要（Phase 4B，可选）
-- 输入被严格限制：仅提供 `diff_summary.json` 与 Phase 4A 的三份 Markdown 文本。
-- 关键约束（提示词规则）：
-  - 只能使用提供的统计 JSON 与本地解释文本。
-  - 不得提及原始 abundance 表内容。
-  - 不得改变统计结论；不得把不显著结果写成显著。
-  - 不得推断因果或机制。
-  - 输出必须是单个 JSON，包含 `diff_interpretation/methods/figure_legends` 三个键，值为 Markdown。
-- 产物留痕：
-  - 请求：`json/llm_request_diff.json`
-  - 响应：`json/llm_response_diff.json`
-  - LLM 输出 Markdown：`ai/llm_*.md`
+## 4. 核心业务流程
 
-强调：
-- AI 文本仅用于“受约束的说明/摘要”，不输出因果结论。
+```mermaid
+flowchart TD
+  A["选择三类输入文件或示例数据"] --> B["创建任务并固化输入"]
+  B --> C["数据质量检查"]
+  C -->|存在错误| X["停止后续分析并显示明细"]
+  C -->|通过或允许的警告| D["保存分组变量和参数"]
+  D --> E["构建分析数据对象"]
+  E --> F["Alpha 与 Beta 多样性"]
+  F --> G["差异丰度分析"]
+  G --> H["机器学习与共现网络"]
+  H --> I["关键菌综合评分"]
+  I --> J["受约束解释"]
+  J --> K["报告汇总与结果下载"]
+```
 
-## 7. 机器学习模块（Random Forest）
-定位：
-- 用随机森林进行 **探索性** 的特征筛选与模式识别，输出特征重要性与训练集预测指标。
+每一步更新任务状态并保存阶段产物。失败时记录错误信息，已成功生成的前序产物予以保留。
 
-方法要点：
-- 以指定分类层级（默认 Genus）的丰度矩阵构建特征。
-- `randomForest(importance=TRUE)` 训练模型。
-- 输出 feature importance 与 confusion matrix；二分类额外输出 ROC（若可计算）。
-- 样本量可靠性提示（写入 `json/ml_summary.json`）：
-  - `n < 20`：exploratory only
-  - `20 <= n < 50`：caution
-  - `n >= 50`：acceptable
+## 5. 任务目录设计
 
-强调：
-- ML 输出反映预测相关模式，**不得作为因果证据**。
+任务编号采用 `job_YYYYMMDD_HHMMSS_xxxxxx` 形式。标准结构如下：
 
-## 8. 网络分析模块（Spearman 共现网络）
-定位：
-- 在指定分类层级上做 **探索性** 的共现关系网络构建，帮助识别可能的核心节点与模块结构。
+```text
+results/<job_id>/
+├─ input/
+│  ├─ abundance.tsv
+│  ├─ metadata.tsv
+│  └─ taxonomy.tsv
+├─ alpha/
+│  ├─ tables/
+│  │  ├─ alpha_diversity.csv
+│  │  └─ alpha_stats.csv
+│  └─ figures/
+│     ├─ overview/
+│     ├─ observed/
+│     ├─ chao1/
+│     ├─ shannon/
+│     └─ simpson/
+├─ beta/
+│  ├─ tables/
+│  │  ├─ beta_pcoa_coordinates.csv
+│  │  ├─ beta_permanova.csv
+│  │  ├─ beta_dispersion.csv
+│  │  └─ beta_dispersion_distances.csv
+│  └─ figures/
+│     ├─ pcoa/
+│     └─ dispersion/
+├─ tables/
+├─ figures/
+├─ json/
+├─ ai/
+├─ objects/
+├─ report/
+├─ logs/
+└─ reproducibility.json
+```
 
-方法要点：
-- 两两 Spearman 相关检验（`cor.test(method="spearman")`）。
-- 对边的 p 值做 FDR 校正；筛边阈值：`abs(rho) >= rho_cutoff` 且 `fdr < p_cutoff`（默认 `0.6` 与 `0.05`）。
-- 中心性：degree、betweenness（normalized）、closeness、eigenvector；并记录 connected component。
+该目录既是运行隔离单元，也是结果下载、报告生成和历史任务复核的基础。
 
-输出：
-- `tables/network_nodes.csv`、`tables/network_edges.csv`
-- `json/network_summary.json`
-- `figures/network_plot.png/.pdf`
+## 6. 数据质量检查设计
 
-强调：
-- 相关不等于因果；网络结构 **不应** 被解读为直接相互作用证据。
+检查逻辑分为结构、标识、内容和对应关系四类：
 
-## 9. Key Taxa Score 模块
-定位：
-- 将三类证据（差异、ML、网络中心性）归一化后融合，输出关键菌候选排序与推荐等级（High/Medium/Low）。
+- 结构检查：必要列是否存在、是否存在有效数据列；
+- 标识检查：`SampleID`、`FeatureID` 是否缺失或重复；
+- 内容检查：丰度是否为数值、是否存在负值或缺失样式值；
+- 对齐检查：样本和特征是否能在三类输入表之间对应。
 
-证据来源与归一化：
-- 差异证据：`differential_score = normalize( (-log10(FDR)) * |log2FC| )`
-- ML 证据：`ml_importance_score = normalize( importance )`
-- 网络证据：`network_centrality_score = normalize( degree + betweenness )`
+检查结果保存为明细表，状态分为 `pass`、`warning` 和 `error`。`error` 用于阻断分析，`warning` 用于提示可能影响解释的情况。
 
-融合策略（加权平均，按“该 taxon 实际可用证据”计算分母，避免 NA）：
-- 若三源都存在：权重 `diff=0.4, ml=0.4, network=0.2`
-- 若缺失某源：按预设规则自动调整（例如只有 diff+ml 则各 0.5）
+## 7. 分析模块设计
 
-输出：
-- `tables/key_taxa_score.csv`
-- `tables/key_taxa_top20.csv`
-- `figures/key_taxa_score_barplot.png/.pdf`
-- `json/key_taxa_summary.json`
+### 7.1 Alpha 多样性
 
-强调：
-- 打分是工程化融合指标，用于候选优先级排序；并不等价于“生物学因果关键性”的证明。
+系统计算样本级多样性指标并按分组变量进行比较。核心展示指标为 Observed、Chao1、Shannon 和 Simpson。所有 Alpha 产物保存到 `alpha/` 专属目录；表格位于 `alpha/tables/`，图形按 overview、observed、chao1、shannon 和 simpson 分目录保存。每个指标及四指标概览均生成箱线图、小提琴图、雨云式组合图、原始散点与中位数、均值±标准误、均值±95%置信区间及中位数±四分位距。结果页通过两个下拉菜单切换指标和图形类型。分组水平超过 8 个时，图形自动切换为横向布局。
 
-## 10. Quarto 报告模块
-定位：
-- 将 job 目录中的产物按模板渲染为可交付的 `report.html`。
+### 7.2 Beta 多样性
 
-实现要点：
-- 使用 `templates/report_template.qmd` 作为输入模板。
-- 渲染参数：`job_dir` 与 `report_ctx`（由 report_prepare 收集路径与存在性信息）。
-- 渲染生成的 HTML 会被复制到：`results/<job_id>/report/report.html`
+默认使用 Bray-Curtis 距离和 PCoA 展示样本间差异，并使用 PERMANOVA 评价分组与群落中心的关联。系统同时使用 `betadisper` 和置换检验评估组内离散度，避免将离散度差异误判为组中心差异。所有 Beta 产物保存在 `beta/` 专属目录。PCoA 采用色盲友好配色及颜色、形状双编码，输出样本点、95%置信椭圆、分组凸包、组中心连线和组合视图；图中标注轴解释率、PERMANOVA 与 PERMDISP 统计量。离散度距离另以小提琴、箱线和原始点组合图展示。
 
-## 11. Shiny 前端模块
-前端采用模块化 Tab（Upload/Data Check/Parameters/Run/Alpha/Beta/Diff/Report），核心原则：
-- UI 只做交互与预览，不直接堆叠分析逻辑。
-- “Run Full Workflow”负责统一编排，生成可检查的产物清单（artifact table）。
+### 7.3 差异丰度
 
-## 12. 结果存储结构（Job Output Layout）
-每次运行创建：`results/job_YYYYMMDD_HHMMSS_xxxxxx/`，推荐理解为“可复现实验单元”。目录结构：
-- `input/`：固化输入
-- `tables/`：表格结果
-- `figures/`：图形结果
-- `json/`：结构化汇总与（可选）LLM 请求/响应留痕
-- `ai/`：本地规则解释与（可选）LLM 摘要输出（Markdown）
-- `report/`：最终 `report.html`
-- `logs/`：错误信息（失败时写入 `error.log`）
-- `reproducibility.json`：输入 MD5、参数与阶段记录（时间戳/权重/阈值等）
+系统在目标分类层级聚合丰度。两组采用 Wilcoxon 秩和检验，多组采用 Kruskal-Wallis 检验，使用 FDR 进行多重校正。完整结果和显著结果分别保存，避免只保留筛选后记录。
 
+### 7.4 机器学习
+
+系统使用随机森林进行探索性分类，保存特征重要性、混淆矩阵和模型指标。样本量不足或类别条件不满足时，在摘要中标记可靠性限制。
+
+### 7.5 共现网络
+
+系统计算分类单元两两 Spearman 相关并进行 FDR 校正，按相关系数和显著性阈值筛边。节点表保存 degree、betweenness、closeness 等中心性指标，边表保存相关方向、强度和校正结果。
+
+## 8. Key Taxa Score 设计
+
+综合评分用于候选优先级排序。三类证据为：
+
+- 差异证据：综合 FDR 和效应量；
+- 机器学习证据：随机森林特征重要性；
+- 网络证据：节点中心性。
+
+各证据先归一化，再按配置权重加权。默认权重为差异 0.4、机器学习 0.4、网络 0.2；某来源缺失时，只以该分类单元实际具备的证据及相应权重计算分数。输出包含各分项、综合分、证据来源和推荐等级，便于解释排序来源。
+
+## 9. 受约束解释设计
+
+解释链路为：
+
+```text
+统计表格和 JSON
+→ 本地规则检查与摘要
+→ 可选大模型受约束改写
+→ Markdown 文本和请求响应留痕
+```
+
+模型输入不包含原始丰度表。提示规则要求保持统计结论、保留不确定性、禁止因果和机制推断，并输出规定结构。模型不可用时，本地规则解释仍可作为报告内容。
+
+## 10. 报告设计
+
+报告上下文由任务目录中已存在的文件生成，Quarto 模板负责版式和汇总。报告阶段不重新计算统计结果，从而保持界面预览、下载文件和报告内容的一致性。标准输出为 `report/report.html`，环境支持时可同时输出 PDF。
+
+## 11. 异常与降级设计
+
+| 场景 | 处理策略 |
+|---|---|
+| 输入不齐或格式错误 | 阻止分析，显示检查明细 |
+| 无显著差异 | 输出完整表、空显著表和明确说明 |
+| 网络无边 | 输出稳定结构或明确空网络状态 |
+| 样本量不足 | 继续探索性分析并降低可靠性等级 |
+| 大模型未配置或调用失败 | 使用本地解释或标记跳过，不改变统计产物 |
+| Quarto 不可用 | 保留已有分析产物，记录报告失败信息 |
+| 某阶段失败 | 标记失败步骤并保留可用的前序结果 |
+
+## 12. 安全与隐私设计
+
+- API 密钥通过环境变量读取，不应写入源代码、文档或结果包；
+- 外部模型只接收经过约束的结构化摘要，不发送原始丰度表；
+- 系统默认在本机运行，任务目录由用户自行管理；
+- 软件不自动完成个人信息去标识化，用户需在导入前处理敏感数据。
+
+## 13. 可维护性设计
+
+- `app.R` 仅负责应用入口和模块组装；
+- `global.R` 负责依赖、配置及源文件加载；
+- `R/` 保存可独立调用的业务函数；
+- `modules/` 保存界面模块；
+- `templates/` 保存报告和提示词模板；
+- `tests/` 与 `scripts/` 保存自动化检查及阶段验证脚本。
+
+新增分析模块应继续遵循“结果落盘 → 结构化摘要 → 界面展示 → 报告引用”的扩展方式。
