@@ -778,12 +778,17 @@ build_ml_taxonomy_map <- function(dataset, feature_ids, tax_level = "Genus") {
   ranks <- intersect(c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), names(tax))
   rows <- lapply(as.character(feature_ids), function(fid) {
     idx <- integer()
+    # microeco uses an encoded, lineage-qualified feature name after taxonomic
+    # aggregation (FeatureID|Kingdom|...|selected rank). Recover the original
+    # FeatureID before looking up the taxonomy table.
+    source_id <- sub("\\|.*$", "", fid)
     if (tax_level %in% names(tax)) {
       direct <- as.character(tax[[tax_level]]) == fid
       stripped <- sub("^[a-z]__", "", as.character(tax[[tax_level]]), ignore.case = TRUE) == sub("^[a-z]__", "", fid, ignore.case = TRUE)
       idx <- which(direct | stripped)
     }
-    if (!length(idx) && fid %in% rownames(tax)) idx <- match(fid, rownames(tax))
+    if (!length(idx) && source_id %in% rownames(tax)) idx <- match(source_id, rownames(tax))
+    if (!length(idx) && "FeatureID" %in% names(tax)) idx <- which(as.character(tax$FeatureID) == source_id)
     tax_row <- if (length(idx)) tax[idx[1L], , drop = FALSE] else NULL
     lineage <- if (length(idx) && length(ranks)) {
       unique_lineages <- unique(apply(tax[idx, ranks, drop = FALSE], 1L, function(z) paste(z, collapse = ";")))
@@ -802,7 +807,12 @@ build_ml_taxonomy_map <- function(dataset, feature_ids, tax_level = "Genus") {
   })
   out <- do.call(rbind, rows)
   duplicate_label <- duplicated(out$display_label) | duplicated(out$display_label, fromLast = TRUE)
-  out$display_label[duplicate_label] <- paste0(out$display_label[duplicate_label], " [", out$feature_id[duplicate_label], "]")
+  if (any(duplicate_label)) {
+    source_id <- sub("\\|.*$", "", out$feature_id[duplicate_label])
+    short_id <- ifelse(nchar(source_id) > 8L, substr(source_id, 1L, 8L), source_id)
+    out$display_label[duplicate_label] <- paste0(out$display_label[duplicate_label], " [", short_id, "]")
+    out$display_label <- make.unique(out$display_label, sep = " #")
+  }
   out
 }
 
@@ -1257,8 +1267,17 @@ plot_ml_importance_stability <- function(importance_table, top_n = 15L) {
     ggplot2::geom_vline(xintercept = 0, color = "grey75", linewidth = 0.4) +
     ggplot2::geom_errorbar(ggplot2::aes(xmin = ci_lower, xmax = ci_upper), orientation = "y", width = 0.15, linewidth = 0.55) +
     ggplot2::geom_point(size = 2.5) +
-    ggplot2::scale_color_manual(values = c(relatively_stable = "#176B87", moderately_stable = "#B26A00", unstable = "#777777")) +
-    ggplot2::labs(title = "Stable discriminative taxa identified by random forest", subtitle = "Points show mean fold-wise permutation importance; intervals are empirical 2.5%–97.5% quantiles", x = "Permutation importance\n(mean decrease in predictive performance)", y = NULL, color = "Stability") +
+    ggplot2::scale_color_manual(
+      values = c(relatively_stable = "#176B87", moderately_stable = "#B26A00", unstable = "#777777"),
+      labels = c(relatively_stable = "Relatively stable", moderately_stable = "Moderately stable", unstable = "Unstable")
+    ) +
+    ggplot2::labs(
+      title = "Stable discriminative taxa identified\nby random forest",
+      subtitle = "Mean fold-wise permutation importance with empirical\n2.5%–97.5% intervals",
+      x = "Permutation importance\n(mean decrease in predictive performance)",
+      y = NULL,
+      color = "Stability"
+    ) +
     .ml_theme()
 }
 

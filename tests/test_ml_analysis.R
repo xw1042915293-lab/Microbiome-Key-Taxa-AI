@@ -107,6 +107,27 @@ encoded <- "ASV1|Bacteria|Proteobacteria|Gammaproteobacteria|ExampleGenus"
 encoded_map <- build_ml_taxonomy_map(list(tax_table = tax_table), encoded, "Genus")
 stopifnot(encoded_map$display_label == "ExampleGenus", encoded_map$taxonomy == encoded)
 
+encoded_tax <- data.frame(
+  FeatureID = c("abcdef1234567890", "fedcba0987654321", "1234567890abcdef"),
+  Kingdom = "Bacteria", Phylum = "Proteobacteria", Class = "Alphaproteobacteria",
+  Order = "Rhizobiales", Family = c("Xanthobacteraceae", "Xanthobacteraceae", "Rhizobiaceae"),
+  Genus = c("Unclassified", "Unclassified", "KnownGenus"), Species = "Unclassified",
+  row.names = c("abcdef1234567890", "fedcba0987654321", "1234567890abcdef"),
+  stringsAsFactors = FALSE
+)
+encoded_features <- c(
+  "abcdef1234567890|Bacteria|Proteobacteria|Alphaproteobacteria|Rhizobiales|Xanthobacteraceae|Unclassified",
+  "fedcba0987654321|Bacteria|Proteobacteria|Alphaproteobacteria|Rhizobiales|Xanthobacteraceae|Unclassified",
+  "1234567890abcdef|Bacteria|Proteobacteria|Alphaproteobacteria|Rhizobiales|Rhizobiaceae|KnownGenus"
+)
+encoded_tax_map <- build_ml_taxonomy_map(list(tax_table = encoded_tax), encoded_features, "Genus")
+stopifnot(
+  identical(encoded_tax_map$display_label[1], "Unclassified_f__Xanthobacteraceae [abcdef12]"),
+  identical(encoded_tax_map$display_label[2], "Unclassified_f__Xanthobacteraceae [fedcba09]"),
+  identical(encoded_tax_map$display_label[3], "KnownGenus"),
+  all(nchar(encoded_tax_map$display_label) < 60L)
+)
+
 importance_summary <- summarize_feature_importance(cv$importance, data.frame(
   feature_id = c("TaxonA", "TaxonB"), display_label = c("TaxonA", "TaxonB"), taxonomy = c("L1", "L2")
 ))
