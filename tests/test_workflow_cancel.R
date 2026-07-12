@@ -2,6 +2,21 @@
 
 source("global.R", local = TRUE)
 
+stopifnot(
+  identical(
+    workflow_normalize_progress_detail("alpha", "running", "姝ｅ湪璁＄畻 Alpha 澶氭牱鎬�"),
+    "正在计算 Alpha 多样性"
+  ),
+  identical(
+    workflow_normalize_progress_detail("network", "done", "缃戠粶鍒嗘瀽瀹屾垚"),
+    "网络分析完成"
+  ),
+  identical(
+    workflow_normalize_progress_detail("ml", "running", "正在运行机器学习分析"),
+    "正在运行机器学习分析"
+  )
+)
+
 sample_ids <- paste0("S", seq_len(6))
 feature_ids <- paste0("F", seq_len(4))
 input_data <- list(

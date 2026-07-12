@@ -369,7 +369,7 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
     workflow_assert_state(state, "run_full_analysis_workflow")
   }
 
-  workflow_set_step(state, progress_cb, log_path, "data_check", "running", "姝ｅ湪妫€鏌ヨ緭鍏ユ暟鎹�")
+  workflow_set_step(state, progress_cb, log_path, "data_check", "running", "正在检查输入数据")
   check_result <- tryCatch(
     run_all_data_checks(input_data, group_var = group_var),
     error = function(e) e
@@ -382,18 +382,18 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
   save_data_check_summary(check_result, job_dir)
   if (!is.null(state)) state$check_result <- check_result
   if (identical(check_result$status, "error")) {
-    msg <- paste0("鏁版嵁妫€鏌ュけ璐ワ細鍙戠幇 ", workflow_count_checks(check_result, "error"), " 涓�敊璇�")
+    msg <- paste0("数据检查失败：发现 ", workflow_count_checks(check_result, "error"), " 个错误")
     workflow_set_step(state, progress_cb, log_path, "data_check", "failed", msg)
     stop("Data check reported validation errors. Please fix the uploaded files and run again.", call. = FALSE)
   }
   if (identical(check_result$status, "warning")) {
-    msg <- paste0("鏁版嵁妫€鏌ュ畬鎴愶紝瀛樺湪 ", workflow_count_checks(check_result, "warning"), " 涓��鍛�")
+    msg <- paste0("数据检查完成，存在 ", workflow_count_checks(check_result, "warning"), " 个警告")
     workflow_set_step(state, progress_cb, log_path, "data_check", "warning", msg)
   } else {
-    workflow_set_step(state, progress_cb, log_path, "data_check", "done", "杈撳叆鏁版嵁妫€鏌ュ畬鎴�")
+    workflow_set_step(state, progress_cb, log_path, "data_check", "done", "输入数据检查完成")
   }
 
-  workflow_set_step(state, progress_cb, log_path, "build_dataset", "running", "姝ｅ湪鏋勫缓 microeco 瀵硅薄")
+  workflow_set_step(state, progress_cb, log_path, "build_dataset", "running", "正在构建 microeco 对象")
   dataset <- tryCatch(
     build_microeco_dataset(
       abundance = input_data$abundance,
@@ -410,9 +410,9 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
   dataset_path <- save_microeco_dataset(dataset, job_dir)
   results$dataset <- dataset
   if (!is.null(state)) state$dataset <- dataset
-  workflow_set_step(state, progress_cb, log_path, "build_dataset", "done", "microeco 瀵硅薄宸叉瀯寤�")
+  workflow_set_step(state, progress_cb, log_path, "build_dataset", "done", "microeco 对象已构建")
 
-  workflow_set_step(state, progress_cb, log_path, "alpha", "running", "姝ｅ湪璁＄畻 Alpha 澶氭牱鎬�")
+  workflow_set_step(state, progress_cb, log_path, "alpha", "running", "正在计算 Alpha 多样性")
   alpha_res <- tryCatch(
     run_alpha_analysis(dataset = dataset, group_var = group_var, job_dir = job_dir),
     error = function(e) e
@@ -422,10 +422,10 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
   } else {
     results$alpha <- alpha_res
     if (!is.null(state)) state$alpha_result <- alpha_res
-    workflow_set_step(state, progress_cb, log_path, "alpha", "done", "Alpha 澶氭牱鎬у畬鎴�")
+    workflow_set_step(state, progress_cb, log_path, "alpha", "done", "Alpha 多样性完成")
   }
 
-  workflow_set_step(state, progress_cb, log_path, "beta", "running", "姝ｅ湪璁＄畻 Beta 澶氭牱鎬�")
+  workflow_set_step(state, progress_cb, log_path, "beta", "running", "正在计算 Beta 多样性")
   beta_res <- tryCatch(
     run_beta_analysis(dataset = dataset, group_var = group_var, job_dir = job_dir, distance = beta_distance),
     error = function(e) e
@@ -435,10 +435,10 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
   } else {
     results$beta <- beta_res
     if (!is.null(state)) state$beta_result <- beta_res
-    workflow_set_step(state, progress_cb, log_path, "beta", "done", "Beta 澶氭牱鎬у畬鎴�")
+    workflow_set_step(state, progress_cb, log_path, "beta", "done", "Beta 多样性完成")
   }
 
-  workflow_set_step(state, progress_cb, log_path, "diff", "running", "姝ｅ湪杩涜�宸�紓涓板害鍒嗘瀽")
+  workflow_set_step(state, progress_cb, log_path, "diff", "running", "正在进行差异丰度分析")
   diff_res <- tryCatch(
     run_diff_analysis(
       dataset = dataset,
@@ -456,15 +456,15 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
     diff_tbl <- diff_res$diff_table %||% data.frame()
     n_sig <- if (is.data.frame(diff_tbl) && "significant" %in% names(diff_tbl)) sum(diff_tbl$significant, na.rm = TRUE) else 0L
     if (!is.data.frame(diff_tbl) || nrow(diff_tbl) < 1) {
-      workflow_set_step(state, progress_cb, log_path, "diff", "warning", "宸�紓涓板害缁撴灉涓虹┖")
+      workflow_set_step(state, progress_cb, log_path, "diff", "warning", "差异丰度结果为空")
     } else if (n_sig > 0) {
-      workflow_set_step(state, progress_cb, log_path, "diff", "done", paste0("宸�紓涓板害瀹屾垚锛�", n_sig, " 涓�樉钁楃壒寰�"))
+      workflow_set_step(state, progress_cb, log_path, "diff", "done", paste0("差异丰度完成：", n_sig, " 个显著特征"))
     } else {
-      workflow_set_step(state, progress_cb, log_path, "diff", "warning", "宸�紓涓板害瀹屾垚锛屼絾娌℃湁鏄捐憲缁撴灉")
+      workflow_set_step(state, progress_cb, log_path, "diff", "warning", "差异丰度完成，但没有显著结果")
     }
   }
 
-  workflow_set_step(state, progress_cb, log_path, "ai", "running", "姝ｅ湪鐢熸垚 AI 瑙ｈ�")
+  workflow_set_step(state, progress_cb, log_path, "ai", "running", "正在生成 AI 解读")
   ai_local <- tryCatch(run_phase4a_workflow(job_dir = job_dir), error = function(e) e)
   if (inherits(ai_local, "error")) {
     ai_local <- NULL
@@ -478,14 +478,14 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
         local_outputs = ai_local,
         llm_outputs = NULL,
         status = "skipped",
-        message = "鏈�厤缃� API key锛岃烦杩� LLM 瑙ｈ�"
+        message = "未配置 API key，跳过 LLM 解读"
       )
     } else {
       ai_result <- workflow_make_ai_result(
         local_outputs = ai_local,
         llm_outputs = ai_llm$outputs,
         status = "skipped",
-        message = "鏈�厤缃� API key锛屽凡鐢熸垚鏈�湴璇存槑"
+        message = "未配置 API key，已生成本地说明"
       )
       results$phase4b <- ai_llm
     }
@@ -500,24 +500,24 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
         local_outputs = ai_local,
         llm_outputs = fallback,
         status = "warning",
-        message = "AI 瑙ｈ�澶辫触锛屽凡淇濈暀鍥為€€璇存槑"
+        message = "AI 解读失败，已保留回退说明"
       )
       if (!is.null(state)) state$ai_result <- ai_result
-      workflow_set_step(state, progress_cb, log_path, "ai", "warning", "AI 瑙ｈ�澶辫触锛屽凡淇濈暀鍥為€€璇存槑")
+      workflow_set_step(state, progress_cb, log_path, "ai", "warning", "AI 解读失败，已保留回退说明")
     } else {
       results$phase4b <- ai_llm
       ai_result <- workflow_make_ai_result(
         local_outputs = ai_local,
         llm_outputs = ai_llm$outputs,
         status = "done",
-        message = "AI 瑙ｈ�瀹屾垚"
+        message = "AI 解读完成"
       )
       if (!is.null(state)) state$ai_result <- ai_result
-      workflow_set_step(state, progress_cb, log_path, "ai", "done", "AI 瑙ｈ�瀹屾垚")
+      workflow_set_step(state, progress_cb, log_path, "ai", "done", "AI 解读完成")
     }
   }
 
-  workflow_set_step(state, progress_cb, log_path, "ml", "running", "姝ｅ湪杩愯�鏈哄櫒瀛︿範鍒嗘瀽")
+  workflow_set_step(state, progress_cb, log_path, "ml", "running", "正在运行机器学习分析")
   ml_res <- tryCatch(
     run_phase5_workflow(
       dataset = dataset,
@@ -537,15 +537,15 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
     if (identical(performance_status, "not_stably_better_than_random")) {
       workflow_set_step(state, progress_cb, log_path, "ml", "warning", "机器学习完成，但未显示稳定且显著优于随机分类的性能")
     } else if (identical(reliability, "exploratory only")) {
-      workflow_set_step(state, progress_cb, log_path, "ml", "warning", "鏈哄櫒瀛︿範瀹屾垚锛屼絾鏍锋湰閲忓亸灏�")
+      workflow_set_step(state, progress_cb, log_path, "ml", "warning", "机器学习完成，但样本量偏小")
     } else if (identical(reliability, "caution")) {
-      workflow_set_step(state, progress_cb, log_path, "ml", "warning", "鏈哄櫒瀛︿範瀹屾垚锛岃�璋ㄦ厧瑙ｉ噴")
+      workflow_set_step(state, progress_cb, log_path, "ml", "warning", "机器学习完成，请谨慎解释")
     } else {
-      workflow_set_step(state, progress_cb, log_path, "ml", "done", "鏈哄櫒瀛︿範鍒嗘瀽瀹屾垚")
+      workflow_set_step(state, progress_cb, log_path, "ml", "done", "机器学习分析完成")
     }
   }
 
-  workflow_set_step(state, progress_cb, log_path, "network", "running", "姝ｅ湪杩愯�缃戠粶鍒嗘瀽")
+  workflow_set_step(state, progress_cb, log_path, "network", "running", "正在运行网络分析")
   network_res <- tryCatch(
     run_phase6_workflow(
       dataset = dataset,
@@ -562,13 +562,13 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
     n_nodes <- network_res$network$summary$n_nodes %||% nrow(network_res$network$node_table %||% data.frame())
     n_edges <- network_res$network$summary$n_edges %||% nrow(network_res$network$edge_table %||% data.frame())
     if (isTRUE(n_nodes < 3) || isTRUE(n_edges < 1)) {
-      workflow_set_step(state, progress_cb, log_path, "network", "warning", "缃戠粶鍒嗘瀽瀹屾垚锛屼絾缃戠粶杈冪█鐤�")
+      workflow_set_step(state, progress_cb, log_path, "network", "warning", "网络分析完成，但网络较稀疏")
     } else {
-      workflow_set_step(state, progress_cb, log_path, "network", "done", "缃戠粶鍒嗘瀽瀹屾垚")
+      workflow_set_step(state, progress_cb, log_path, "network", "done", "网络分析完成")
     }
   }
 
-  workflow_set_step(state, progress_cb, log_path, "key_taxa", "running", "姝ｅ湪璁＄畻鍏抽敭鑿岃瘎鍒�")
+  workflow_set_step(state, progress_cb, log_path, "key_taxa", "running", "正在计算关键菌评分")
   key_taxa_res <- tryCatch(run_phase7_workflow(job_dir = job_dir), error = function(e) e)
   if (inherits(key_taxa_res, "error")) {
     workflow_set_step(state, progress_cb, log_path, "key_taxa", "failed", workflow_trim_message(conditionMessage(key_taxa_res)))
@@ -577,15 +577,15 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
     if (!is.null(state)) state$key_taxa_result <- key_taxa_res
     used_sources <- key_taxa_res$score_result$used_sources %||% character(0)
     if (length(used_sources) >= 2) {
-      workflow_set_step(state, progress_cb, log_path, "key_taxa", "done", "鍏抽敭鑿岃瘎鍒嗗畬鎴�")
+      workflow_set_step(state, progress_cb, log_path, "key_taxa", "done", "关键菌评分完成")
     } else if (length(used_sources) == 1) {
-      workflow_set_step(state, progress_cb, log_path, "key_taxa", "warning", "鍏抽敭鑿岃瘎鍒嗗畬鎴愶紝浣嗚瘉鎹�潵婧愯緝灏�")
+      workflow_set_step(state, progress_cb, log_path, "key_taxa", "warning", "关键菌评分完成，但证据来源较少")
     } else {
-      workflow_set_step(state, progress_cb, log_path, "key_taxa", "warning", "鍏抽敭鑿岃瘎鍒嗙粨鏋滀负绌�")
+      workflow_set_step(state, progress_cb, log_path, "key_taxa", "warning", "关键菌评分结果为空")
     }
   }
 
-  workflow_set_step(state, progress_cb, log_path, "report", "running", "姝ｅ湪鐢熸垚鎶ュ憡")
+  workflow_set_step(state, progress_cb, log_path, "report", "running", "正在生成报告")
   report_res <- tryCatch(run_phase8_workflow(job_dir = job_dir), error = function(e) e)
   if (inherits(report_res, "error")) {
     workflow_set_step(state, progress_cb, log_path, "report", "failed", workflow_trim_message(conditionMessage(report_res)))
@@ -595,9 +595,9 @@ run_full_analysis_workflow <- function(input_data, job_dir, group_var,
     report_paths <- workflow_report_paths(html_path = report_res$html_path, pdf_path = report_res$pdf_path)
     if (!is.null(state)) state$report_paths <- report_paths
     if (!is.null(report_res$pdf_error) && nzchar(report_res$pdf_error)) {
-      workflow_set_step(state, progress_cb, log_path, "report", "warning", "鎶ュ憡宸茬敓鎴� HTML锛屼絾 PDF 瀵煎嚭澶辫触")
+      workflow_set_step(state, progress_cb, log_path, "report", "warning", "报告已生成 HTML，但 PDF 导出失败")
     } else {
-      workflow_set_step(state, progress_cb, log_path, "report", "done", "鎶ュ憡鐢熸垚瀹屾垚")
+      workflow_set_step(state, progress_cb, log_path, "report", "done", "报告生成完成")
     }
   }
 
@@ -683,6 +683,62 @@ start_background_analysis_workflow <- function(input_data, job_dir, group_var,
   invisible(proc$get_pid())
 }
 
+workflow_normalize_progress_detail <- function(step_id, status, detail) {
+  detail <- as.character(detail %||% "")
+  has_mojibake <- grepl("�|姝ｅ湪|鏁版嵁|瀹屾垚|鏈哄櫒|缃戠粶|鍏抽敭|鎶ュ憡|瑙ｈ�|宸�紓", detail)
+  if (!has_mojibake) return(detail)
+  count <- regmatches(detail, regexpr("[0-9]+", detail))
+  count <- if (length(count) && nzchar(count)) count else NULL
+  if (identical(status, "running")) {
+    return(switch(
+      step_id,
+      data_check = "正在检查输入数据",
+      build_dataset = "正在构建 microeco 对象",
+      alpha = "正在计算 Alpha 多样性",
+      beta = "正在计算 Beta 多样性",
+      diff = "正在进行差异丰度分析",
+      ai = "正在生成 AI 解读",
+      ml = "正在运行机器学习分析",
+      network = "正在运行网络分析",
+      key_taxa = "正在计算关键菌评分",
+      report = "正在生成报告",
+      paste0("正在运行：", step_id)
+    ))
+  }
+  if (identical(status, "done")) {
+    return(switch(
+      step_id,
+      data_check = "输入数据检查完成",
+      build_dataset = "microeco 对象已构建",
+      alpha = "Alpha 多样性完成",
+      beta = "Beta 多样性完成",
+      diff = if (!is.null(count)) paste0("差异丰度完成：", count, " 个显著特征") else "差异丰度分析完成",
+      ai = "AI 解读完成",
+      ml = "机器学习分析完成",
+      network = "网络分析完成",
+      key_taxa = "关键菌评分完成",
+      report = "报告生成完成",
+      paste0(step_id, " 完成")
+    ))
+  }
+  if (identical(status, "warning")) {
+    return(switch(
+      step_id,
+      data_check = if (!is.null(count)) paste0("数据检查完成，存在 ", count, " 个警告") else "数据检查完成，存在警告",
+      diff = "差异丰度完成，但结果需要复核",
+      ai = "AI 解读失败，已保留回退说明",
+      ml = "机器学习完成，请谨慎解释",
+      network = "网络分析完成，但网络较稀疏",
+      key_taxa = "关键菌评分完成，但证据来源较少",
+      report = "报告已生成 HTML，但 PDF 导出失败",
+      paste0(step_id, " 完成，但存在警告")
+    ))
+  }
+  if (identical(status, "skipped") && identical(step_id, "ai")) return("未配置 API key，跳过 LLM 解读")
+  if (identical(status, "failed")) return(paste0(step_id, " 执行失败，请查看错误日志"))
+  detail
+}
+
 .workflow_sync_background_log <- function(state) {
   args <- state$wf_args %||% list()
   log_path <- args$log_path %||% NULL
@@ -699,6 +755,7 @@ start_background_analysis_workflow <- function(input_data, job_dir, group_var,
     status <- switch(parts[2L], START = "running", DONE = "done", WARNING = "warning", SKIPPED = "skipped", FAILED = "failed")
     step_id <- parts[3L]
     detail <- if (length(parts) >= 4L) parts[4L] else status
+    detail <- workflow_normalize_progress_detail(step_id, status, detail)
     if (step_id %in% workflow_step_ids()) set_step_status(state, step_id, status, detail)
     if (is.function(args$progress_cb)) try(args$progress_cb(step_id, status, detail), silent = TRUE)
   }
