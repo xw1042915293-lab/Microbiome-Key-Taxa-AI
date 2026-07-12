@@ -1385,8 +1385,8 @@ run_ml_analysis <- function(dataset, group_var, tax_level = "Genus", job_dir,
     stringsAsFactors = FALSE
   )
   parameters <- data.frame(
-    parameter = c("algorithm", "package", "tax_level", "group_variable", "min_prevalence", "min_mean_relative_abundance", "transformation", "pseudocount", "folds", "repeats", "trees", "permutations", "top_taxa", "seed", "nested_cv", "tuning"),
-    value = c("Random Forest", paste0("randomForest ", as.character(utils::packageVersion("randomForest"))), tax_level, group_var, min_prevalence, min_mean_abundance, transformation, pseudocount, cv$folds, cv$repeats, trees, permutations, top_n, seed, FALSE, "Training-fold OOB tuning inside each outer CV split"),
+    parameter = c("algorithm", "package", "tax_level", "group_variable", "min_prevalence", "min_mean_relative_abundance", "transformation", "pseudocount", "folds", "repeats", "trees", "permutations", "top_taxa", "seed", "class_weights", "nested_cv", "tuning"),
+    value = c("Random Forest", paste0("randomForest ", as.character(utils::packageVersion("randomForest"))), tax_level, group_var, min_prevalence, min_mean_abundance, transformation, pseudocount, cv$folds, cv$repeats, trees, permutations, top_n, seed, if (isTRUE(cv$used_class_weights)) "inverse-frequency weights used" else "not required", FALSE, "Training-fold OOB tuning inside each outer CV split"),
     stringsAsFactors = FALSE
   )
   pooled_wide <- as.data.frame(as.list(stats::setNames(performance$pooled$estimate, performance$pooled$metric)), check.names = FALSE)

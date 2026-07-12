@@ -448,6 +448,170 @@ mod_results_overview_server <- function(id, state) {
       dt
     })
 
+    ml_figure_spec <- c(
+      importance = "ml_figure_feature_importance.png",
+      roc = "ml_figure_roc.png",
+      pr = "ml_figure_pr.png",
+      confusion = "ml_figure_confusion_matrix.png",
+      performance = "ml_figure_performance_distribution.png",
+      top_taxa = "ml_figure_top_taxa.png",
+      combined = "ml_figure_combined.png"
+    )
+    ml_figure_labels <- c(
+      importance = "稳定性特征重要性",
+      roc = "交叉验证 ROC 曲线",
+      pr = "Precision–Recall 曲线",
+      confusion = "OOF 混淆矩阵",
+      performance = "重复交叉验证性能分布",
+      top_taxa = "Top taxa 丰度与支持性统计",
+      combined = "论文组合图"
+    )
+
+    read_ml_overview_csv <- function(filename) {
+      if (is.null(state$job_dir)) return(NULL)
+      path <- file.path(state$job_dir, "tables", filename)
+      if (!file.exists(path)) return(NULL)
+      tryCatch(readr::read_csv(path, show_col_types = FALSE, progress = FALSE), error = function(e) NULL)
+    }
+
+    output$ml_plot_control <- shiny::renderUI({
+      if (is.null(state$job_dir)) return(NULL)
+      available <- names(ml_figure_spec)[vapply(ml_figure_spec, function(filename) {
+        file.exists(file.path(state$job_dir, "figures", filename))
+      }, logical(1))]
+      if (!length(available)) return(shiny::helpText("尚未生成机器学习图形。"))
+      shiny::selectInput(
+        session$ns("ml_plot_view"), "选择机器学习图形",
+        choices = stats::setNames(available, unname(ml_figure_labels[available])),
+        selected = if ("importance" %in% available) "importance" else available[[1]]
+      )
+    })
+
+    output$ml_importance_controls <- shiny::renderUI({
+      if (!identical(input$ml_plot_view %||% "importance", "importance")) return(NULL)
+      bslib::layout_columns(
+        shiny::selectInput(
+          session$ns("ml_taxon_visibility"), "分类单元显示",
+          choices = c("仅显示已分类分类单元" = "classified", "包含未分类分类单元" = "all"),
+          selected = "classified"
+        ),
+        shiny::selectInput(
+          session$ns("ml_display_top_n"), "显示数量",
+          choices = c("Top 10" = 10L, "Top 15" = 15L, "Top 20" = 20L, "Top 30" = 30L),
+          selected = 15L
+        ),
+        col_widths = c(6, 6)
+      )
+    })
+
+    ml_importance_overview <- shiny::reactive({
+      df <- read_ml_overview_csv("ml_feature_importance_stability.csv")
+      if (is.null(df) || !is.data.frame(df)) return(NULL)
+      if (identical(input$ml_taxon_visibility %||% "classified", "classified")) {
+        label <- as.character(df$display_label %||% df$feature_id)
+        df <- df[!grepl("^Unclassified(?:_|$)", label, ignore.case = TRUE), , drop = FALSE]
+      }
+      df
+    })
+
+    output$ml_importance_dynamic <- shiny::renderPlot({
+      df <- ml_importance_overview()
+      shiny::validate(shiny::need(!is.null(df) && nrow(df) > 0L, "当前筛选条件下没有可展示的分类单元。可切换为“包含未分类分类单元”。"))
+      top_n <- suppressWarnings(as.integer(input$ml_display_top_n %||% 15L))
+      plot_ml_importance_stability(df, min(top_n, nrow(df)))
+    }, res = 120, bg = "white", height = function() {
+      top_n <- suppressWarnings(as.integer(input$ml_display_top_n %||% 15L))
+      max(560L, min(900L, 250L + 34L * top_n))
+    })
+
+    output$ml_dynamic_plot <- shiny::renderUI({
+      view <- input$ml_plot_view %||% "importance"
+      if (identical(view, "importance")) {
+        return(shiny::tagList(
+          shiny::tags$p(
+            class = "kkai-muted",
+            "该筛选仅影响图形展示；模型训练、OOF 性能和导出完整结果保持不变。"
+          ),
+          shiny::plotOutput(session$ns("ml_importance_dynamic"), width = "100%")
+        ))
+      }
+      filename <- unname(ml_figure_spec[[view]])
+      if (is.null(filename) || is.null(state$job_dir) || is.null(fig_prefix())) return(shiny::helpText("图形尚未生成。"))
+      full <- file.path(state$job_dir, "figures", filename)
+      if (!file.exists(full)) return(shiny::helpText("所选图形尚未生成。"))
+      src <- paste0(fig_prefix(), "/", filename, "?v=", as.numeric(file.info(full)$mtime))
+      shiny::tags$a(
+        href = src, target = "_blank",
+        shiny::tags$div(
+          class = "kkai-result-image-wrap",
+          shiny::tags$img(src = src, class = "kkai-result-img kkai-result-img--fit", alt = unname(ml_figure_labels[[view]]))
+        )
+      )
+    })
+
+    output$ml_workflow_ui <- shiny::renderUI({
+      parameters <- read_ml_overview_csv("ml_model_parameters.csv")
+      sample_summary <- read_ml_overview_csv("ml_sample_summary.csv")
+      if (is.null(parameters) || !all(c("parameter", "value") %in% names(parameters))) {
+        return(shiny::tags$div(class = "kkai-alert kkai-alert--warning", "模型参数文件缺失，无法展示训练流程。"))
+      }
+      params <- stats::setNames(as.character(parameters$value), parameters$parameter)
+      samples <- if (!is.null(sample_summary) && all(c("item", "value") %in% names(sample_summary))) {
+        stats::setNames(as.character(sample_summary$value), sample_summary$item)
+      } else character(0)
+      value_or <- function(x, fallback = "未记录") if (!is.null(x) && length(x) && nzchar(x[[1]])) x[[1]] else fallback
+      folds <- value_or(params[["folds"]])
+      repeats <- value_or(params[["repeats"]])
+      algorithm <- value_or(params[["algorithm"]], "Random Forest")
+      package <- value_or(params[["package"]], "randomForest")
+      transform <- value_or(params[["transformation"]])
+      prevalence <- value_or(params[["min_prevalence"]])
+      abundance <- value_or(params[["min_mean_relative_abundance"]])
+      trees <- value_or(params[["trees"]])
+      permutations <- value_or(params[["permutations"]])
+      seed <- value_or(params[["seed"]])
+      class_weights <- value_or(params[["class_weights"]], "按训练折类别比例自动判定")
+      total_samples <- value_or(samples[["total_samples"]])
+      group_count <- value_or(samples[["group_count"]])
+      original_features <- value_or(samples[["original_features"]])
+
+      flow_step <- function(number, title, detail) {
+        shiny::tags$div(
+          class = "kkai-ml-flow-step",
+          shiny::tags$span(class = "kkai-ml-flow-number", number),
+          shiny::tags$div(shiny::tags$strong(title), shiny::tags$p(detail))
+        )
+      }
+      shiny::tagList(
+        shiny::tags$div(
+          class = "kkai-alert kkai-alert--info",
+          shiny::tags$b("算法："), paste0(algorithm, "（", package, "）"),
+          shiny::tags$br(),
+          "性能来自验证折的 out-of-fold 预测，不使用训练集拟合值充当模型性能。"
+        ),
+        shiny::tags$div(
+          class = "kkai-ml-flow",
+          flow_step("1", "输入与校验", paste0(total_samples, " 个样本、", group_count, " 个分组、", original_features, " 个原始特征；匹配样本名并检查缺失值与类别样本量。")),
+          flow_step("2", "训练折内预处理", paste0("每个训练折独立执行检出率 ≥ ", prevalence, "、平均相对丰度 ≥ ", abundance, "、插补、近零方差过滤和 ", transform, " 变换。")),
+          flow_step("3", "重复分层交叉验证", paste0(folds, "-fold × ", repeats, " repeats，随机种子 ", seed, "；每折保持类别比例。")),
+          flow_step("4", "随机森林训练与调参", paste0(trees, " 棵树；在每个外层训练折中根据 OOB error 选择 mtry 和 minimum node size。Class weights：", class_weights, "。")),
+          flow_step("5", "验证折性能评估", "保存每个验证折的真实标签、预测标签和概率，汇总 ROC AUC、PR AUC、balanced accuracy、F1、MCC 与混淆矩阵。"),
+          flow_step("6", "稳定性与随机性检验", paste0("逐折计算 permutation importance 并汇总经验区间；执行 ", permutations, " 次标签置换检验，判断性能是否优于随机分类。"))
+        ),
+        shiny::tags$div(
+          class = "kkai-alert kkai-alert--warning",
+          "当前属于重复交叉验证而非独立外部验证；关键菌丰度检验使用同一数据集，只能作为支持性探索证据。"
+        )
+      )
+    })
+
+    output$ml_methods_overview <- shiny::renderText({
+      if (is.null(state$job_dir)) return("结果尚未生成。")
+      path <- file.path(state$job_dir, "ml_methods.txt")
+      if (!file.exists(path)) return("Methods 文件尚未生成。")
+      paste(readLines(path, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+    })
+
     output$summary_bar <- shiny::renderUI({
       if (is.null(state$job_dir)) {
         return(shiny::tags$div(class = "kkai-alert kkai-alert--info", "请先创建任务并运行分析。"))
@@ -649,8 +813,17 @@ mod_results_overview_server <- function(id, state) {
           "ml",
           "机器学习",
           summary,
-          img_file = "ml_importance.png",
-          status = step_status("ml")
+          status = step_status("ml"),
+          details = bslib::navset_card_tab(
+            bslib::nav_panel(
+              "结果图",
+              shiny::uiOutput(session$ns("ml_plot_control")),
+              shiny::uiOutput(session$ns("ml_importance_controls")),
+              shiny::uiOutput(session$ns("ml_dynamic_plot"))
+            ),
+            bslib::nav_panel("训练流程", shiny::uiOutput(session$ns("ml_workflow_ui"))),
+            bslib::nav_panel("Methods", shiny::verbatimTextOutput(session$ns("ml_methods_overview")))
+          )
         )
       } else {
         NULL
